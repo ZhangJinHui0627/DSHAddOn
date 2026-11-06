@@ -1,0 +1,5 @@
+# dsh-qwen-voucher bundle patch - inserts the coupon balance badge entry.
+- insert:
+    - id: qwen-voucher
+      name: 'dsh-qwen-voucher'
+      config: {}

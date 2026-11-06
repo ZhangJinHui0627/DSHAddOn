@@ -1,0 +1,5 @@
+# dsh-status-badges bundle patch - one entry owns all four header badges.
+- insert:
+    - id: status-badges
+      name: 'dsh-status-badges'
+      config: {}

@@ -1,0 +1,44 @@
+{
+  "name": "dsh-claude-model-picker",
+  "version": "1.0.0",
+  "description": "Claude Code style model picker for DSH: seat trigger, grouped model list with rate badges and descriptions, search, reasoning effort.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "model-picker",
+    "claude-style"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "data/model-descriptions.json",
+    "data/prices.json",
+    "README.md",
+    "package.json"
+  ]
+}

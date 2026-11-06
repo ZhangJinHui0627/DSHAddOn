@@ -1,0 +1,44 @@
+{
+  "name": "dsh-qwen-voucher",
+  "version": "1.0.0",
+  "description": "阿里云代金券余额胶囊：在 DSH 对话顶栏只读显示千问 AI 平台代金券余额（Qwen voucher balance badge for DeepSeek Harness, read-only).",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "aliyun",
+    "bss",
+    "voucher",
+    "badge"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "package.json"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "dsh-agy-hide-account",
+  "version": "0.1.0",
+  "description": "Hide the redundant AGY master-account pill in the DSH conversation header (CSS + DOM masking, decoupled from dsh-agy-link).",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "antigravity"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "package.json"
+  ]
+}

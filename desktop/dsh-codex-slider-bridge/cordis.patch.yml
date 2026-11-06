@@ -1,0 +1,5 @@
+# dsh-codex-slider-bridge bundle patch - inserts the bridge entry.
+- insert:
+    - id: codex-slider-bridge
+      name: 'dsh-codex-slider-bridge'
+      config: {}

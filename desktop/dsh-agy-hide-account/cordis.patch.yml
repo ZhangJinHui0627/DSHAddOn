@@ -1,0 +1,5 @@
+# dsh-agy-hide-account bundle patch - inserts the header-pill masking entry.
+- insert:
+    - id: agy-hide-account
+      name: 'dsh-agy-hide-account'
+      config: {}

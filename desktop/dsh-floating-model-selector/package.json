@@ -1,0 +1,46 @@
+{
+  "name": "dsh-floating-model-selector",
+  "version": "1.0.3",
+  "description": "可拖动、常驻展开的悬浮模型选择与推理等级面板。",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "model-selector",
+    "reasoning-effort",
+    "floating"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots",
+        "sessions",
+        "modelDirectories",
+        "remote",
+        "remote.session"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "package.json"
+  ]
+}

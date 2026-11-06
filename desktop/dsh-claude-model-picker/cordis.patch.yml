@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-claude-model-picker
+      name: 'dsh-claude-model-picker'
+      config: {}
