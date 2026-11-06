@@ -1,0 +1,370 @@
+{
+  "_说明": "参考价，单位 USD / 百万 token，数组 [缓存命中, 输入未命中, 输出]；cny/cnyPeak 是 DeepSeek 官方人民币价（谷/峰）。价格仅供参考，不是账单。缺价的模型会自动去公开目录查，查不到会在面板「未计价模型」列出。",
+  "currency": "CNY",
+  "cnyPerUsd": 7.2,
+  "autoLookup": {
+    "enabled": true,
+    "ttlHours": 24,
+    "timeoutMs": 12000,
+    "sources": [
+      "openrouter",
+      "modelsdev",
+      "litellm"
+    ]
+  },
+  "strip": {
+    "rotateMs": 6500
+  },
+  "peak": {
+    "ranges": [
+      [
+        9,
+        12
+      ],
+      [
+        14,
+        18
+      ]
+    ],
+    "weekdays": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "utcOffsetHours": 8
+  },
+  "aliases": {
+    "deepseek-v4-flash": "deepseek-flash",
+    "deepseek-v4-flash-vision-exp": "deepseek-flash",
+    "qwen3.8-max-prime": "qwen3.8-max",
+    "gpt-6-luna-pro:batch": "gpt-6-luna-pro"
+  },
+  "prices": {
+    "deepseek-flash": {
+      "label": "flash",
+      "cny": [
+        0.02,
+        1,
+        4
+      ],
+      "cnyPeak": [
+        0.04,
+        2,
+        8
+      ],
+      "usd": [
+        0.003,
+        0.15,
+        0.6
+      ],
+      "source": "DeepSeek 官方定价页",
+      "used": true
+    },
+    "deepseek-v4-pro": {
+      "label": "v4-pro",
+      "cny": [
+        0.15,
+        4.5,
+        13.5
+      ],
+      "cnyPeak": [
+        0.3,
+        9,
+        27
+      ],
+      "usd": [
+        0.022,
+        0.66,
+        1.98
+      ],
+      "source": "DeepSeek 官方(谷)"
+    },
+    "deepseek-v4.1-flash-1017": {
+      "label": "v4.1-flash-1017",
+      "usd": [
+        0.003,
+        0.15,
+        0.6
+      ],
+      "source": "OpenRouter deepseek/deepseek-v4.1-flash-1017",
+      "used": true
+    },
+    "deepseek-v4.1-flash": {
+      "label": "v4.1-flash",
+      "usd": [
+        0.003,
+        0.15,
+        0.6
+      ],
+      "source": "OpenRouter deepseek"
+    },
+    "deepseek-v4.1-flash-sg": {
+      "label": "v4.1-flash-sg",
+      "usd": [
+        0.003,
+        0.15,
+        0.6
+      ],
+      "source": "参考 deepseek-v4.1-flash"
+    },
+    "gpt-6-luna": {
+      "label": "6-luna",
+      "usd": [
+        0.01,
+        0.1,
+        0.5
+      ],
+      "source": "OpenRouter openai/gpt-6-luna",
+      "used": true
+    },
+    "gpt-6-luna-pro": {
+      "label": "6-luna-pro",
+      "usd": [
+        0.01,
+        0.1,
+        0.5
+      ],
+      "source": "openrouter openai/gpt-6-luna-pro"
+    },
+    "gpt-6-astra": {
+      "label": "6-astra",
+      "usd": [
+        1,
+        10,
+        50
+      ],
+      "source": "litellm gpt-6-astra"
+    },
+    "gpt-6-sol": {
+      "label": "6-sol",
+      "usd": [
+        0.2,
+        2,
+        10
+      ],
+      "source": "litellm gpt-6-sol"
+    },
+    "gpt-6.1-sol": {
+      "label": "6.1-sol",
+      "usd": [
+        0.1,
+        2,
+        10
+      ],
+      "source": "litellm gpt-6.1-sol"
+    },
+    "gpt-6.1-terra": {
+      "label": "6.1-terra",
+      "usd": [
+        0.05,
+        1,
+        5
+      ],
+      "source": "litellm gpt-6.1-terra"
+    },
+    "gpt-5.6-luna": {
+      "label": "5.6-luna",
+      "usd": [
+        0.02,
+        0.2,
+        1.2
+      ],
+      "source": "litellm gpt-5.6-luna"
+    },
+    "gpt-5.6-sol": {
+      "label": "5.6-sol",
+      "usd": [
+        0.4,
+        4,
+        20
+      ],
+      "source": "litellm gpt-5.6-sol"
+    },
+    "gpt-5.6-terra": {
+      "label": "5.6-terra",
+      "usd": [
+        0.2,
+        2,
+        12
+      ],
+      "source": "litellm gpt-5.6-terra"
+    },
+    "hy4": {
+      "label": "4",
+      "usd": [
+        0.021,
+        0.417,
+        1.2505
+      ],
+      "source": "OpenRouter tencent/hy4（参考）",
+      "note": "WorkBuddy 活动期可能免费，估价仅参考",
+      "used": true
+    },
+    "hy4std": {
+      "label": "4std",
+      "usd": [
+        0.021,
+        0.417,
+        1.2505
+      ],
+      "source": "参考 tencent/hy4"
+    },
+    "hy4free": {
+      "label": "4free",
+      "usd": [
+        0.021,
+        0.417,
+        1.2505
+      ],
+      "source": "OpenRouter tencent/hy4（参考）",
+      "note": "WorkBuddy 活动期可能免费，估价仅参考",
+      "used": true
+    },
+    "hy4-preview": {
+      "label": "4-preview",
+      "usd": [
+        0.042,
+        0.834,
+        2.501
+      ],
+      "source": "OpenRouter tencent/hy4-preview"
+    },
+    "qwen3.8-max": {
+      "label": "3.8-max",
+      "usd": [
+        0.3125,
+        2.5,
+        7.5
+      ],
+      "source": "models.dev venice/qwen-3-8-max"
+    },
+    "qwen3.8-max-0902": {
+      "label": "3.8-max-0902",
+      "usd": [
+        0.25,
+        2,
+        6
+      ],
+      "source": "openrouter qwen/qwen3.8-max-0902"
+    },
+    "glm-5.3": {
+      "label": "5.3",
+      "usd": [
+        0.0689,
+        0.0699,
+        1.4
+      ],
+      "source": "openrouter z-ai/glm-5.3"
+    },
+    "glm-5.3-flash": {
+      "label": "5.3-flash",
+      "usd": [
+        0.03,
+        0.15,
+        0.5
+      ],
+      "source": "openrouter z-ai/glm-5.3-flash"
+    },
+    "glm-5.2": {
+      "label": "5.2",
+      "usd": [
+        0.005,
+        0.006,
+        6.8
+      ],
+      "source": "openrouter z-ai/glm-5.2"
+    },
+    "kimi-k3": {
+      "label": "k3",
+      "usd": [
+        0.182,
+        0.192,
+        16
+      ],
+      "source": "openrouter moonshotai/kimi-k3"
+    },
+    "kimi-k3.1-pro": {
+      "label": "k3.1-pro",
+      "usd": [
+        0.2,
+        2,
+        10
+      ],
+      "source": "openrouter moonshotai/kimi-k3.1-pro"
+    },
+    "kimi-k3.1-pro-highspeed": {
+      "label": "k3.1-pro-highspeed",
+      "usd": [
+        0.1944,
+        3.8874,
+        20.3342
+      ],
+      "source": "models.dev moonshotai-cn/kimi-k3.1-pro-highspeed"
+    },
+    "minimax-m3.1-flash": {
+      "label": "m3.1-flash",
+      "usd": [
+        0.015,
+        0.15,
+        0.6
+      ],
+      "source": "openrouter minimax/minimax-m3.1-flash"
+    },
+    "mimo-v2.6-pro": {
+      "label": "v2.6-pro",
+      "usd": [
+        0.0036,
+        0.435,
+        0.87
+      ],
+      "source": "openrouter xiaomi/mimo-v2.6-pro"
+    },
+    "grok-4.7": {
+      "label": "4.7",
+      "usd": [
+        0.5,
+        2,
+        6
+      ],
+      "source": "openrouter x-ai/grok-4.7"
+    },
+    "gemini-3.8-flash": {
+      "label": "3.8-flash",
+      "usd": [
+        0.075,
+        0.75,
+        3.75
+      ],
+      "source": "litellm gemini-3.8-flash"
+    },
+    "step-5-preview": {
+      "label": "5-preview",
+      "usd": [
+        0.1,
+        1,
+        2.7
+      ],
+      "source": "openrouter stepfun/step-5-preview"
+    },
+    "space-bunny": {
+      "label": "bunny",
+      "usd": [
+        0.03,
+        0.15,
+        0.6
+      ],
+      "source": "models.dev opencode-go/space-bunny"
+    },
+    "max-model": {
+      "label": "max-model",
+      "usd": [
+        1,
+        5,
+        20
+      ],
+      "source": "占位参考"
+    }
+  }
+}
