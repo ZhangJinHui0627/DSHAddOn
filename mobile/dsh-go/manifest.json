@@ -1,0 +1,25 @@
+{
+  "name": "dsh-go",
+  "kind": "mobile-install-kit",
+  "app": {
+    "name": "DSH Go",
+    "platform": "android",
+    "minAndroid": "8",
+    "license": "AGPL-3.0",
+    "upstream": "https://github.com/ccch1mneyyy/dsh-go",
+    "releases": "https://github.com/ccch1mneyyy/dsh-go/releases/latest"
+  },
+  "apk": null,
+  "note": "The APK is not committed: it is a ~190 MB binary and exceeds GitHub's per-file limit. Download it from the upstream releases page, or drop it next to serve-apk.mjs and pass --apk.",
+  "plugins": {
+    "format": "DSH bundle",
+    "catalog": "https://github.com/ccch1mneyyy/dsh-go-market",
+    "note": "DSH Go installs ordinary DSH bundles. A mobile plugin is published to npm and listed in the DSH Go market; it does not need a separate package layout."
+  },
+  "scripts": {
+    "serve-apk.mjs": "serve the APK over LAN for phone download",
+    "install-adb.bat": "install over USB/wireless adb",
+    "watch-and-install.ps1": "wait for a device, then install",
+    "pair-host.mjs": "render the pairing QR for this machine"
+  }
+}
