@@ -692,10 +692,15 @@ window.__ModuleLoader__.load({
     const REFRESH = base + "/plugins/dsh-qwen-voucher/refresh";
     const PREFS = base + "/plugins/dsh-qwen-voucher/prefs";
     const POLL_MS = 30000;
-    const LABEL_PREFIX = "千问AI平台可用 ";
+    const LABEL_PREFIX = "qianwen ";
     const INTERVALS = [5, 10, 30];
     const SEG_GAP = 10;
 
+    function n2fmt(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return "-";
+      return n.toFixed(2);
+    }
     function money(v) {
       const n = Number(v);
       if (!Number.isFinite(n)) return "-";
@@ -738,14 +743,14 @@ window.__ModuleLoader__.load({
       return [{ label: "我的", ok: st.ok !== false, at: st.at ?? null, coupons: st.coupons || [], selected: st.selected || null, error: st.error ?? null }];
     }
     function segPrefix(acc, i) {
-      return i === 0 ? LABEL_PREFIX : (acc.label || "同学") + " ";
+      return i === 0 ? LABEL_PREFIX : ((acc.label || "qianwen-" + (i + 1)) + " ");
     }
     function segText(acc, i) {
       const prefix = segPrefix(acc, i);
       if (!acc || acc.configured === false) return prefix + "未配置";
       const sel = acc.selected || null;
       if (!sel) return prefix + (acc.error ? "读取失败" : "无可用");
-      return prefix + money(sel.balance);
+      return prefix + n2fmt(sel.balance);
     }
     function segDot(acc) {
       if (!acc || acc.ok === false) return "#94a3b8";
