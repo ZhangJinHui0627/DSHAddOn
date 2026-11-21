@@ -887,8 +887,7 @@ window.__ModuleLoader__.load({
       })();
       const kids = [];
       accs.forEach(function (acc, i) {
-        if (i > 0) kids.push(h("span", { key: "sep" + i, style: { opacity: 0.5, margin: "0 1px" }, "aria-hidden": "true" }, "·"));
-        kids.push(h("span", { key: "txt" + i }, segText(acc, i)));
+        kids.push(h("span", { key: "txt" + i }, (i > 0 ? " · " : "") + segText(acc, i)));
       });
       const pill = h("button", {
         type: "button",
@@ -1229,7 +1228,7 @@ window.__ModuleLoader__.load({
       const stale = (snap && snap.error) || failAt > 0;
       const hasDual = dual && (dual.cn.total !== null || dual.gl.total !== null);
       const label = hasDual
-        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + "·GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
+        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + " · GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
         : snap
           ? credits
             ? "WorkBuddy " + fmt(credits.total)
