@@ -1,7 +1,7 @@
 {
   "name": "dsh-claude-model-picker",
   "version": "1.0.0",
-  "description": "Claude Code style model picker for DSH: seat trigger, grouped model list with rate badges and descriptions, search, reasoning effort.",
+  "description": "Claude Code 风格的模型选择器：座位触发器、分组模型列表（倍率徽章与说明）、搜索、推理等级。移植自 Nwflower/dsh-claude-style 的选择器部分。",
   "type": "module",
   "license": "MIT",
   "main": "./index.js",

@@ -9,44 +9,9 @@ window.__ModuleLoader__.load({
     const useSyncExternalStore = React.useSyncExternalStore;
 
     const STATE_URL = "/plugins/dsh-status-badges/state";
-    const DEFAULTS = { agy: true, qwen: true, workbuddy: true, codex: true };
+    const DEFAULTS = { agy: true, qwen: true, workbuddy: true, codex: true, zcode: true };
 
-    /* ── 手机端专门优化（只在 max-width:640px 生效，PC 端零变化）─────────────
-       1. 官方顶栏插槽行 [class*="headerActions"] 默认 flex:none 且无 overflow，
-          四枚胶囊在窄屏被挤出屏幕且不能滑动；这里让它可横向手势滚动并隐藏滚动条。
-          用 :has(.agy-btn ~ .agy-btn) 只命中「含多枚胶囊」的外层插槽行，
-          不会误命中 AGY 胶囊自己的 div[position:relative] 包裹层。
-       2. 胶囊收紧内距/字号、限宽 + 文字省略，AGY 长文案换成 G / C&G 短版。
-       3. AGY 详情面板原本 position:absolute 挂在胶囊包裹层里，一旦外层容器
-          可滚动就会被裁剪；手机端改成底部弹出面板（其它三枚本来就是 fixed）。 */
-    const MOBILE_STYLE_ID = "dsh-status-badges-mobile-style";
-    const MOBILE_CSS = [
-      ".agy-badge-text-short{display:none}",
-      "@media (max-width: 640px){",
-      "[class*=\"headerActions\"]:has(.agy-btn ~ .agy-btn){overflow-x:auto!important;overflow-y:hidden!important;flex-wrap:nowrap!important;flex:0 1 auto!important;min-width:0!important;max-width:100%!important;-webkit-overflow-scrolling:touch;scrollbar-width:none;gap:6px!important}",
-      "[class*=\"headerActions\"]:has(.agy-btn ~ .agy-btn)::-webkit-scrollbar{display:none!important}",
-      ".agy-btn{padding:2px 8px!important;font-size:11px!important;gap:4px!important;max-width:52vw!important;flex:0 0 auto!important;overflow:hidden!important}",
-      ".agy-btn > span:not(:first-child){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".agy-badge-text-full{display:none!important}",
-      ".agy-badge-text-short{display:inline!important}",
-      ".agy-popover{position:fixed!important;left:8px!important;right:8px!important;top:auto!important;bottom:12px!important;width:auto!important;min-width:0!important;max-height:70vh;overflow-y:auto;z-index:10001!important}",
-      "}"
-    ].join("\n");
-    function installMobileStyles() {
-      try {
-        if (typeof document === "undefined" || !document.head) return;
-        var el = document.getElementById(MOBILE_STYLE_ID);
-        if (el) { el.textContent = MOBILE_CSS; return; }
-        var style = document.createElement("style");
-        style.id = MOBILE_STYLE_ID;
-        style.setAttribute("data-plugin-css", "dsh-status-badges-mobile");
-        style.textContent = MOBILE_CSS;
-        document.head.appendChild(style);
-      } catch (e) { /* 样式失败不影响胶囊功能 */ }
-    }
-    installMobileStyles();
-
-    var snapshot = { agy: true, qwen: true, workbuddy: true, codex: true };
+    var snapshot = { agy: true, qwen: true, workbuddy: true, codex: true, zcode: true };
     var listeners = new Set();
     function subscribe(fn) { listeners.add(fn); return function () { listeners.delete(fn); }; }
     function getSnapshot() { return snapshot; }
@@ -74,12 +39,13 @@ window.__ModuleLoader__.load({
 
     /** 四枚胶囊的占位态：内层组件因数据未就绪/查询失败返回 null 时用它顶上，
      *  保证顶栏永远有四枚，不会因为某一路查询失败而整枚消失。 */
-    const PLACEHOLDER_LABELS = { agy: "Antigravity —", qwen: "千问 AI 平台 —", workbuddy: "WorkBuddy —", codex: "Codex —" };
+    const PLACEHOLDER_LABELS = { agy: "Antigravity —", qwen: "千问 AI 平台 —", workbuddy: "WorkBuddy —", codex: "Codex —", zcode: "ZCode —" };
     const PLACEHOLDER_TITLES = {
       agy: "Antigravity 额度：数据尚未就绪或读取失败，正在等待下一次刷新",
       qwen: "千问代金券：数据尚未就绪或读取失败，正在等待下一次刷新",
       workbuddy: "WorkBuddy 积分：数据尚未就绪或读取失败，正在等待下一次刷新",
-      codex: "Codex 额度：数据尚未就绪或读取失败，正在等待下一次刷新"
+      codex: "Codex 额度：数据尚未就绪或读取失败，正在等待下一次刷新",
+      zcode: "ZCode 额度：数据尚未就绪或读取失败，正在等待下一次刷新"
     };
     function badgePlaceholder(key) {
       return React.createElement(
@@ -102,6 +68,14 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 详情弹层统一 Portal：挂 body、z-index 压过悬浮面板与 remote 面板（0.2.2 修「点不开」）。
+     *  usage: return badgePopupPortal(host, jsx)；host={anchorEl, popupRef} 由调用方提供。
+     *  位置以锚元素 getBoundingClientRect() 下方 6px、左对齐（右溢出时右对齐）计算，
+     *  在窗口 resize/scroll 时自动重算；组件卸载时清理监听。 */
+    function badgePopupPortal(anchorEl, jsx) {
+      if (!anchorEl || typeof document === "undefined") return jsx;
+      return ReactDOM.createPortal(jsx, document.body);
+    }
     // ===== agy =====
     var agyModule = (function (useSwitches, placeholder) {
 
@@ -376,11 +350,6 @@ window.__ModuleLoader__.load({
       // 形态 2：全称 + 5 小时/周配额双水位全景展示
       // 例如：Gemini 92%/75% · Claude and GPT 6%/53%
       const badgeText = modelItems.map(item => `${item.name} ${formatPair(item.quota)}`).join(" · ");
-      // 手机端短版：Gemini → G、Claude and GPT → C&G，省下约一半宽度
-      const badgeTextShort = modelItems.map(item => {
-        const shortName = item.name === "Gemini" ? "G" : item.name === "Claude and GPT" ? "C&G" : item.name;
-        return `${shortName} ${formatPair(item.quota)}`;
-      }).join(" · ");
 
       // 点的颜色：取所有可用 5h 剩余中最低者报警
       const valid5h = modelItems
@@ -465,14 +434,12 @@ window.__ModuleLoader__.load({
               flexShrink: 0
             }
           }),
-          h("span", { key: "text", className: "agy-badge-text-full" }, badgeText),
-          h("span", { key: "text-short", className: "agy-badge-text-short" }, badgeTextShort)
+          h("span", { key: "text" }, badgeText)
         ]),
 
         // 下拉浮层详情面板 (Popover)
         isOpen ? h("div", {
           key: "popover",
-          className: "agy-popover",
           style: {
             position: "absolute",
             top: "calc(100% + 6px)",
@@ -740,7 +707,7 @@ window.__ModuleLoader__.load({
     };
     const popStyle = {
       position: "fixed",
-      zIndex: 9998,
+      zIndex: 2147483002,
       width: "340px",
       background: "var(--dsw-alias-bg-layer-1, #fff)",
       border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
@@ -918,7 +885,7 @@ window.__ModuleLoader__.load({
             style: Object.assign({}, btnBase, { marginLeft: "auto" }),
           }, busy ? "刷新中…" : "立即刷新")));
 
-      return h(React.Fragment, null, pill, pop);
+      return h(React.Fragment, null, pill, pop ? badgePopupPortal(pillRef.current, pop) : null);
     }
 
     function apply(ctx, switches) {
@@ -948,6 +915,36 @@ window.__ModuleLoader__.load({
     const win = globalThis;
     const base = win.location?.origin ?? "";
     const USAGE = base + "/plugins/dsh-connect-workbuddy/usage?region=global";
+    const CREDITS_CN = base + "/plugins/dsh-connect-workbuddy/account-credits?region=cn";
+    const CREDITS_GL = base + "/plugins/dsh-connect-workbuddy/account-credits?region=global";
+    const DUAL_CACHE_KEY = "dsh-workbuddy-dual-cache-v1";
+    function fetchJson(url) {
+      return fetch(url, { cache: "no-store", headers: { accept: "application/json" } }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+    }
+    /** 拉两个区的 account-credits；国外区按 accountId 去重（多投影取第一条）。 */
+    function fetchDualCredits() {
+      return Promise.all([fetchJson(CREDITS_CN).catch(function () { return null; }), fetchJson(CREDITS_GL).catch(function () { return null; })]).then(function (rs) {
+        function fold(j) {
+          if (!j || !Array.isArray(j.accounts)) return { total: null, accounts: [] };
+          const seen = new Set();
+          const accounts = [];
+          let sum = 0;
+          for (const a of j.accounts) {
+            const c = Number(a && a.credits);
+            if (!Number.isFinite(c)) continue;
+            if (a.id && seen.has(a.id)) continue;
+            if (a.id) seen.add(a.id);
+            sum += c;
+            accounts.push({ name: String((a && a.accountName) || a.id || "?"), credits: c, expiringSoon: Number(a && a.expiringSoon) || 0, nearestExpiryMs: Number(a && a.nearestExpiryMs) || null, selected: a.selected === true });
+          }
+          return { total: sum, accounts: accounts };
+        }
+        return { cn: fold(rs[0]), gl: fold(rs[1]), at: Date.now() };
+      });
+    }
     const CACHE_KEY = "dsh-workbuddy-credits-cache-v1";
     const MINUTES_KEY = "dsh-workbuddy-credits-minutes-v1";
     const INTERVALS = [5, 10, 30];
@@ -1070,7 +1067,7 @@ window.__ModuleLoader__.load({
     };
     const popStyle = {
       position: "fixed",
-      zIndex: 9998,
+      zIndex: 2147483002,
       width: "360px",
       background: "var(--dsw-alias-bg-layer-1, #fff)",
       border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
@@ -1096,6 +1093,7 @@ window.__ModuleLoader__.load({
 
     function WorkBuddyCreditsBadge() {
       const [snap, setSnap] = useState(null);
+      const [dual, setDual] = useState(null);
       const [minutes, setMinutesState] = useState(readMinutes);
       const [open, setOpen] = useState(false);
       const [busy, setBusy] = useState(false);
@@ -1114,12 +1112,14 @@ window.__ModuleLoader__.load({
           const cached = readCache();
           if (!force && cached && Date.now() - cached.at < minutes * 60000) {
             setSnap(cached);
+            try { const d = JSON.parse(win.localStorage.getItem(DUAL_CACHE_KEY) || "null"); if (d && d.at) setDual(d); } catch (e) { /* ignore */ }
             setMissing(false);
             setBusy(false);
             return function () {
               alive = false;
             };
           }
+          fetchDualCredits().then(function (d) { if (alive && d && (d.cn.total !== null || d.gl.total !== null)) { setDual(d); try { if (win.localStorage) win.localStorage.setItem(DUAL_CACHE_KEY, JSON.stringify(d)); } catch (e) { /* ignore */ } } });
           fetch(USAGE, { cache: "no-store", headers: { accept: "application/json" } })
             .then(function (r) {
               if (r.status === 404) {
@@ -1206,15 +1206,18 @@ window.__ModuleLoader__.load({
 
       const credits = snap && snap.credits ? snap.credits : null;
       const stale = (snap && snap.error) || failAt > 0;
-      const label = snap
-        ? credits
-          ? "WorkBuddy " + fmt(credits.total)
-          : snap.rejected
-            ? "WorkBuddy 登录失效"
-            : "WorkBuddy 无读数"
-        : failAt
-          ? "WorkBuddy 读取失败"
-          : null;
+      const hasDual = dual && (dual.cn.total !== null || dual.gl.total !== null);
+      const label = hasDual
+        ? "CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + "  │  GL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
+        : snap
+          ? credits
+            ? "WorkBuddy " + fmt(credits.total)
+            : snap.rejected
+              ? "WorkBuddy 登录失效"
+              : "WorkBuddy 无读数"
+          : failAt
+            ? "WorkBuddy 读取失败"
+            : null;
       if (label === null) return null;
 
       const color = !snap ? "#94a3b8" : snap.rejected ? "#ef4444" : stale ? "#f59e0b" : "#10b981";
@@ -1265,7 +1268,13 @@ window.__ModuleLoader__.load({
         h("span", {
           style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: color },
         }),
-        h("span", null, label)
+        hasDual
+          ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: "10px" } },
+              h("span", null, "CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-")),
+              h("span", { style: { opacity: 0.35, padding: "0 2px" }, "aria-hidden": "true" }, "│"),
+              h("span", null, "GL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-"))
+            )
+          : h("span", null, label)
       );
 
       if (!open) return pill;
@@ -1317,8 +1326,24 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { style: { fontWeight: 700, marginBottom: "6px" } },
-          "WorkBuddy Global · 积分余额" + (stale ? "（离线快照）" : "")
+          (hasDual ? "WorkBuddy 积分 · 国内 / 国际" : "WorkBuddy Global · 积分余额") + (stale ? "（离线快照）" : "")
         ),
+        hasDual ? h("div", { style: { marginBottom: "8px" } },
+          ["cn", "gl"].map(function (rg) {
+            const zone = dual[rg];
+            const name = rg === "cn" ? "国内版 CN" : "国际版 Global";
+            return h("div", { key: rg, style: { marginBottom: "8px" } },
+              h("div", { style: { fontWeight: 700, fontSize: "11.5px", opacity: 0.75, marginBottom: "3px" } }, name + " 合计 " + (zone.total !== null ? fmt(zone.total) : "-")),
+              zone.accounts.length ? zone.accounts.map(function (a, i) {
+                return h("div", { key: i, style: { display: "flex", gap: "8px", margin: "2px 0", opacity: 0.85 } },
+                  h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, (a.selected ? "● " : "") + a.name),
+                  h("span", { style: { fontVariantNumeric: "tabular-nums" } }, fmt(a.credits)),
+                  h("span", { style: { width: "70px", textAlign: "right", opacity: 0.6 } }, a.nearestExpiryMs ? countdown(a.nearestExpiryMs) : "")
+                );
+              }) : h("div", { style: { opacity: 0.6, fontSize: "11px" } }, "无账号数据")
+            );
+          })
+        ) : null,
         rows.map(function (rw, i) {
           return h(
             "div",
@@ -1372,7 +1397,7 @@ window.__ModuleLoader__.load({
         )
       );
 
-      return h(React.Fragment, null, pill, pop);
+      return h(React.Fragment, null, pill, pop ? badgePopupPortal(pillRef.current, pop) : null);
     }
 
     function apply(ctx, switches) {
@@ -1477,6 +1502,7 @@ window.__ModuleLoader__.load({
 
     function CodexQuotaBadge(props) {
       var React = require("react");
+    var ReactDOM = require("react-dom");
       var h = React.createElement;
       var useState = React.useState;
       var useEffect = React.useEffect;
@@ -1617,7 +1643,7 @@ window.__ModuleLoader__.load({
 
       var popStyle = {
         position: "fixed",
-        zIndex: 9998,
+        zIndex: 2147483002,
         width: "360px",
         background: "var(--dsw-alias-bg-layer-1, #fff)",
         border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
@@ -1630,7 +1656,7 @@ window.__ModuleLoader__.load({
         left: pos.left,
       };
 
-      return h(React.Fragment, null, pill,
+      return h(React.Fragment, null, pill, badgePopupPortal(pillRef.current,
         h("div", { ref: popRef, style: popStyle },
           h("div", { style: { fontWeight: 700, marginBottom: "6px" } }, "Codex 订阅 · 额度" + (stale ? "（上次快照）" : "")),
           rows,
@@ -1642,7 +1668,7 @@ window.__ModuleLoader__.load({
               type: "button",
               style: { padding: "2px 9px", borderRadius: "999px", fontSize: "11px", cursor: "pointer", border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3))", background: "transparent", color: "inherit" },
               onClick: function () { setSnap(null); setNonce(function (n) { return n + 1; }); },
-            }, "立即刷新"))));
+            }, "立即刷新")))));
     }
 
       function apply(ctx, switches) {
@@ -1662,13 +1688,174 @@ window.__ModuleLoader__.load({
       return { apply: apply };
     })(useSwitches, badgePlaceholder);
 
+
+
+    // ===== zcode =====
+    var zcodeModule = (function (useSwitches, placeholder) {
+    var win2 = globalThis;
+    var ZBASE = (globalThis.location && globalThis.location.origin) || "";
+    var ZSUMMARY = ZBASE + "/api/zcode-start-plan/summary";
+    var ZBALANCE = ZBASE + "/api/zcode-start-plan/balance?id=";
+    var ZCACHE_KEY = "dsh-zcode-quota-cache-v1";
+
+    function zFmtTokens(n) {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return "-";
+      const abs = Math.abs(v);
+      if (abs >= 1e8) return (v / 1e8).toFixed(2).replace(/\.?0+$/, "") + "亿";
+      if (abs >= 1e4) return (v / 1e4).toFixed(1).replace(/\.0$/, "") + "万";
+      return String(Math.round(v));
+    }
+    function zNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+
+    /** 聚合：跨账号按 planName（模型）求和 remaining/total。 */
+    function zAggregate(accounts) {
+      const byModel = new Map();
+      for (const a of accounts || []) {
+        const b = a && a.balance;
+        if (!b) continue;
+        const buckets = Array.isArray(b.buckets) && b.buckets.length ? b.buckets : [b];
+        for (const bk of buckets) {
+          const name = String((bk && bk.showName) || b.planName || "未知模型");
+          const cur = byModel.get(name) || { remaining: 0, total: 0, expiresAt: null };
+          cur.remaining += zNum(bk && bk.remaining !== undefined ? bk.remaining : b.remaining);
+          cur.total += zNum(bk && bk.total !== undefined ? bk.total : b.total);
+          const exp = Number(bk && bk.expiresAt) || Number(b.expiresAt) || 0;
+          if (exp && (!cur.expiresAt || exp < cur.expiresAt)) cur.expiresAt = exp;
+          byModel.set(name, cur);
+        }
+      }
+      return Array.from(byModel.entries()).map(function (kv) { return { model: kv[0], remaining: kv[1].remaining, total: kv[1].total, expiresAt: kv[1].expiresAt }; });
+    }
+
+    function zReadCache() { try { const j = JSON.parse(win2.localStorage.getItem(ZCACHE_KEY) || "null"); return j && j.models ? j : null; } catch (e) { return null; } }
+    function zWriteCache(d) { try { win2.localStorage.setItem(ZCACHE_KEY, JSON.stringify(d)); } catch (e) { /* ignore */ } }
+
+    function ZcodeQuotaBadge() {
+      const { useState, useEffect, useRef } = React;
+      const [models, setModels] = useState(null);
+      const [at, setAt] = useState(0);
+      const [err, setErr] = useState(null);
+      const [open, setOpen] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [pos, setPos] = useState({ top: 0, left: 0 });
+      const [, tick] = useState(0);
+      const pillRef = useRef(null);
+      const popRef = useRef(null);
+
+      const load = function () {
+        setBusy(true);
+        fetch(ZSUMMARY, { cache: "no-store", headers: { accept: "application/json" } })
+          .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(function (j) {
+            const accounts = (j && j.accounts) || [];
+            return Promise.all(accounts.map(function (a) {
+              return fetch(ZBALANCE + encodeURIComponent(a.id), { cache: "no-store", headers: { accept: "application/json" } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (bj) { return bj && bj.ok ? { id: a.id, nickname: a.nickname, balance: bj.balance } : { id: a.id, nickname: a.nickname, balance: null }; })
+                .catch(function () { return { id: a.id, nickname: a.nickname, balance: null }; });
+            }));
+          })
+          .then(function (withBalance) {
+            const models2 = zAggregate(withBalance);
+            const doc = { models: models2, accounts: withBalance, at: Date.now() };
+            setModels(models2); setAt(doc.at); setErr(null); setBusy(false);
+            zWriteCache(doc);
+          })
+          .catch(function (e) {
+            const c = zReadCache();
+            if (c) { setModels(c.models); setAt(c.at); }
+            setErr(String((e && e.message) || e)); setBusy(false);
+          });
+      };
+
+      useEffect(function () { load(); }, []);
+      useEffect(function () { const id = win2.setInterval(load, 5 * 60000); return function () { win2.clearInterval(id); }; }, []);
+      useEffect(function () { const id = win2.setInterval(function () { tick(function (n) { return n + 1; }); }, 30000); return function () { win2.clearInterval(id); }; }, []);
+
+      useEffect(function () {
+        if (!open) return undefined;
+        const onDown = function (e) { if (pillRef.current && pillRef.current.contains(e.target)) return; if (popRef.current && popRef.current.contains(e.target)) return; setOpen(false); };
+        const onKey = function (e) { if (e.key === "Escape") setOpen(false); };
+        document.addEventListener("pointerdown", onDown, true);
+        document.addEventListener("keydown", onKey);
+        return function () { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey); };
+      }, [open]);
+
+      if (models === null) return null;
+      if (models.length === 0 && !err) return null;
+
+      const stale = Boolean(err);
+      const label = models.length === 0 ? "ZCode 无额度" : models.map(function (m) { return m.model + " " + zFmtTokens(m.remaining); }).join(" · ");
+      const pct = models.length && models[0].total > 0 ? models[0].remaining / models[0].total : NaN;
+      const color = !Number.isFinite(pct) ? "#94a3b8" : pct <= 0.2 ? "#ef4444" : pct <= 0.5 ? "#f59e0b" : "#10b981";
+
+      const openPop = function () {
+        if (pillRef.current) {
+          const b = pillRef.current.getBoundingClientRect();
+          setPos({ top: b.bottom + 6, left: Math.max(8, Math.min(b.left, (win2.innerWidth || 1200) - 376)) });
+        }
+        setOpen(function (v) { return !v; });
+      };
+
+      const pill = h("button", { type: "button", className: "agy-btn", ref: pillRef,
+        title: models.map(function (m) { return m.model + ": " + zFmtTokens(m.remaining) + " / " + zFmtTokens(m.total) + (m.expiresAt ? " · " + stamp(m.expiresAt) + "到期" : ""); }).join("\n") + (err ? "\n最近读取失败：" + err : ""),
+        style: Object.assign({}, pillStyle, { opacity: stale ? 0.7 : 1 }),
+        onClick: openPop },
+        h("span", { style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: color } }),
+        h("span", null, label)
+      );
+      if (!open) return pill;
+
+      const pop = h("div", { ref: popRef, style: Object.assign({}, popStyle, { top: pos.top, left: pos.left }) },
+        h("div", { style: { fontWeight: 700, marginBottom: "6px" } }, "ZCode 账号池 · 按模型聚合" + (stale ? "（离线快照）" : "")),
+        models.map(function (m, i) {
+          const p = m.total > 0 ? m.remaining / m.total : null;
+          return h("div", { key: i, style: { margin: "4px 0" } },
+            h("div", { style: { display: "flex", gap: "8px", alignItems: "center" } },
+              h("span", { style: { flex: 1, fontWeight: 600 } }, m.model),
+              h("span", { style: { fontVariantNumeric: "tabular-nums" } }, zFmtTokens(m.remaining) + " / " + zFmtTokens(m.total)),
+              h("span", { style: { width: "70px", textAlign: "right", opacity: 0.6 } }, m.expiresAt ? countdown(m.expiresAt) : "")
+            ),
+            p !== null ? h("div", { style: { height: "5px", borderRadius: "3px", background: "var(--dsw-alias-border-l1, rgba(128,128,128,.25))", marginTop: "3px", overflow: "hidden" } },
+              h("div", { style: { width: Math.max(0, Math.min(100, p * 100)) + "%", height: "100%", background: dotColor(p * 100) } })) : null
+          );
+        }),
+        err ? h("div", { style: { marginTop: "6px", color: "#ef4444", fontSize: "11px", wordBreak: "break-all" } }, String(err).slice(0, 150)) : null,
+        h("div", { style: { marginTop: "6px", opacity: 0.7 } }, "上次成功：" + ago(at) + " · 每 5 分钟刷新"),
+        h("div", { style: { marginTop: "8px", display: "flex", gap: "6px" } },
+          h("button", { type: "button", style: { padding: "2px 9px", borderRadius: "999px", fontSize: "11px", cursor: "pointer", border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3))", background: "transparent", color: "inherit" }, onClick: function () { load(); } }, busy ? "刷新中…" : "立即刷新")
+        )
+      );
+
+      return h(React.Fragment, null, pill, pop ? badgePopupPortal(pillRef.current, pop) : null);
+    }
+
+      function apply(ctx, switches) {
+        ctx.slots.inject("conversation.session.header.actions", function () {
+          return ctx.slots.register(
+            { name: "conversation.session.header.actions", id: "zcode-quota-badge", order: 15 },
+            function ZcodeQuotaBadgeSlot(props) {
+              useSwitches();
+              if (!switches.zcode) return null;
+              var el = ZcodeQuotaBadge(Object.assign({}, props, { __ctx: ctx }));
+              return el === null ? placeholder("zcode") : el;
+            }
+          );
+        });
+      }
+
+      return { apply: apply };
+    })(useSwitches, badgePlaceholder);
+
     // ---- settings panel: one row per badge, each with a live switch ----
 
     const BADGE_ROWS = [
       { key: "agy", label: "Antigravity 额度", hint: "Gemini / Claude / GPT-OSS 的 5 小时与每周额度" },
       { key: "qwen", label: "千问代金券", hint: "阿里云 BSS 代金券余额" },
       { key: "workbuddy", label: "WorkBuddy 积分", hint: "WorkBuddy 账户剩余积分" },
-      { key: "codex", label: "Codex 额度", hint: "Codex 订阅的用量窗口" }
+      { key: "codex", label: "Codex 额度", hint: "Codex 订阅的用量窗口" },
+      { key: "zcode", label: "ZCode 额度", hint: "账号池按模型聚合的剩余 token" }
     ];
 
     function saveSwitches(patch) {
@@ -1756,11 +1943,11 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
-      installMobileStyles();
       agyModule.apply(ctx, snapshot);
       qwenModule.apply(ctx, snapshot);
       wbModule.apply(ctx, snapshot);
       codexModule.apply(ctx, snapshot);
+      zcodeModule.apply(ctx, snapshot);
       loadSwitches();
 
       try {

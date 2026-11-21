@@ -18,8 +18,8 @@ import crypto from 'node:crypto';
 export const name = 'dsh-status-badges';
 export const inject = [];
 
-const BADGE_IDS = ['agy', 'qwen', 'workbuddy', 'codex'];
-const BADGE_DEFAULTS = { agy: true, qwen: true, workbuddy: true, codex: true };
+const BADGE_IDS = ['agy', 'qwen', 'workbuddy', 'codex', 'zcode'];
+const BADGE_DEFAULTS = { agy: true, qwen: true, workbuddy: true, codex: true, zcode: true };
 const BADGES_DIR = 'dsh-status-badges';
 
 function badgesHome() {

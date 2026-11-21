@@ -1,10 +1,5 @@
 # dsh-status-badges
 
-> 本插件把四个独立徽章聚合为一个插件，代码来源：
-> `dsh-agy-quota-badge`、`dsh-qwen-voucher`、`dsh-workbuddy-credits`、`dsh-codex-quota-badge`（均为 MIT）。
-> 本仓库的改动主要是聚合、移动端窄屏适配与开关统一管理。
-> 遵循上游 MIT 许可，版权归原作者所有。
-
 三个对话顶栏状态胶囊合并成一个插件，各自带开关。
 
 | 胶囊 | 数据来源 | 顺序 | 开关 |

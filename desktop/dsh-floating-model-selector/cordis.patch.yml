@@ -1,4 +1,0 @@
-- insert:
-    - id: floating-model-selector
-      name: 'dsh-floating-model-selector'
-      config: {}
