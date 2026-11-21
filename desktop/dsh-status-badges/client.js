@@ -887,7 +887,7 @@ window.__ModuleLoader__.load({
       })();
       const kids = [];
       accs.forEach(function (acc, i) {
-        if (i > 0) kids.push(h("span", { key: "sep" + i, style: { opacity: 0.55, margin: "0 2px" }, "aria-hidden": "true" }, "·"));
+        if (i > 0) kids.push(h("span", { key: "sep" + i, style: { opacity: 0.5, margin: "0 1px" }, "aria-hidden": "true" }, "·"));
         kids.push(h("span", { key: "txt" + i }, segText(acc, i)));
       });
       const pill = h("button", {
@@ -1229,7 +1229,7 @@ window.__ModuleLoader__.load({
       const stale = (snap && snap.error) || failAt > 0;
       const hasDual = dual && (dual.cn.total !== null || dual.gl.total !== null);
       const label = hasDual
-        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + " · GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
+        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + "·GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
         : snap
           ? credits
             ? "WorkBuddy " + fmt(credits.total)
@@ -2002,6 +2002,15 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      /* 紧凑化：覆盖宿主顶栏 headerActions 的 10px 间距（胶囊之间距离拉近） */
+      try {
+        if (typeof document !== "undefined" && !document.getElementById("dsh-status-badges-compact")) {
+          const st = document.createElement("style");
+          st.id = "dsh-status-badges-compact";
+          st.textContent = ".an3WzG_headerActions{gap:6px !important}";
+          (document.head || document.documentElement).appendChild(st);
+        }
+      } catch (e) { /* ignore */ }
       agyModule.apply(ctx, snapshot);
       qwenModule.apply(ctx, snapshot);
       wbModule.apply(ctx, snapshot);
