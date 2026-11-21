@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
 
     const React = require("react");
     const useSyncExternalStore = React.useSyncExternalStore;
+    const h = React.createElement;
 
     const STATE_URL = "/plugins/dsh-status-badges/state";
     const DEFAULTS = { agy: true, qwen: true, workbuddy: true, codex: true, zcode: true };
@@ -68,14 +69,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 详情弹层统一 Portal：挂 body、z-index 压过悬浮面板与 remote 面板（0.2.2 修「点不开」）。
-     *  usage: return badgePopupPortal(host, jsx)；host={anchorEl, popupRef} 由调用方提供。
-     *  位置以锚元素 getBoundingClientRect() 下方 6px、左对齐（右溢出时右对齐）计算，
-     *  在窗口 resize/scroll 时自动重算；组件卸载时清理监听。 */
-    function badgePopupPortal(anchorEl, jsx) {
-      if (!anchorEl || typeof document === "undefined") return jsx;
-      return ReactDOM.createPortal(jsx, document.body);
-    }
     /* ══════ 共享工具块（1.4.1 顶层化）：五个胶囊统一引用 ══════ */
     function fmt(n) {
       const v = Number(n);
@@ -138,16 +131,18 @@ window.__ModuleLoader__.load({
       outline: "none",
     };
     const popStyle = {
-      position: "fixed",
-      zIndex: 2147483002,
-      width: "360px",
-      background: "var(--dsw-alias-bg-layer-1, #fff)",
+      position: "absolute",
+      top: "calc(100% + 6px)",
+      zIndex: 10000,
+      width: "340px",
+      background: "var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #18181b))",
       border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
       borderRadius: "10px",
-      boxShadow: "0 8px 24px rgba(0,0,0,.18)",
+      boxShadow: "0 10px 28px rgba(0,0,0,.35)",
       padding: "10px 12px",
       fontSize: "12px",
       color: "var(--dsw-alias-label-primary, inherit)",
+      cursor: "default",
     };
     // ===== agy =====
     var agyModule = (function (useSwitches, placeholder) {
@@ -672,8 +667,8 @@ window.__ModuleLoader__.load({
           order: 11,
           label: "Antigravity Quota"
         }, function AgySlot(props) {
-          useSwitches();
-          if (!switches.agy) return null;
+          const curSwitches = useSwitches();
+          if (curSwitches && curSwitches.agy === false) return null;
           var el = AgyQuotaBadge(props);
           return el === null ? placeholder("agy") : el;
         });
@@ -810,9 +805,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false);
       const [saving, setSaving] = useState(null);
       const [, tick] = useState(0);
-      const pillRef = useRef(null);
-      const popRef = useRef(null);
-      const [pos, setPos] = useState({ top: 0, left: 0 });
+      const rootRef = useRef(null);
 
       useEffect(() => {
         let alive = true;
@@ -830,17 +823,19 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         if (!open) return;
-        const onDown = (e) => {
-          if (pillRef.current && pillRef.current.contains(e.target)) return;
-          if (popRef.current && popRef.current.contains(e.target)) return;
-          setOpen(false);
+        const handleOutsideClick = (e) => {
+          if (rootRef.current && !rootRef.current.contains(e.target)) {
+            setOpen(false);
+          }
         };
-        const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
-        document.addEventListener("pointerdown", onDown, true);
-        document.addEventListener("keydown", onKey);
+        const handleKeyDown = (e) => {
+          if (e.key === "Escape") setOpen(false);
+        };
+        win.addEventListener("mousedown", handleOutsideClick, true);
+        win.addEventListener("keydown", handleKeyDown, true);
         return () => {
-          document.removeEventListener("pointerdown", onDown, true);
-          document.removeEventListener("keydown", onKey);
+          win.removeEventListener("mousedown", handleOutsideClick, true);
+          win.removeEventListener("keydown", handleKeyDown, true);
         };
       }, [open]);
 
@@ -861,10 +856,6 @@ window.__ModuleLoader__.load({
       }).join("\n") + "\n上次成功：" + ago(st.at) + "，每 " + curInterval + " 分钟刷新";
 
       const openPop = () => {
-        if (pillRef.current) {
-          const b = pillRef.current.getBoundingClientRect();
-          setPos({ top: b.bottom + 6, left: Math.max(8, Math.min(b.left, (win.innerWidth || 1200) - 356)) });
-        }
         setOpen((v) => !v);
       };
       const doRefresh = () => {
@@ -894,13 +885,10 @@ window.__ModuleLoader__.load({
       const pill = h("button", {
         type: "button",
         className: "agy-btn",
-        ref: pillRef,
         title: title,
         style: Object.assign({}, pillStyle, { opacity: stale ? 0.65 : 1 }),
         onClick: openPop,
       }, kids);
-
-      if (!open) return pill;
 
       const blocks = accs.map((acc, i) => {
         const rows = [];
@@ -930,7 +918,15 @@ window.__ModuleLoader__.load({
             h("span", { style: vStyle }, rw[1]))));
       });
 
-      const pop = h("div", { ref: popRef, style: Object.assign({}, popStyle, { top: pos.top, left: pos.left }) },
+      const pop = h("div", {
+        style: Object.assign({}, popStyle, {
+          position: "absolute",
+          top: "calc(100% + 6px)",
+          left: 0,
+          zIndex: 10000,
+          width: "340px",
+        })
+      },
         blocks,
         h("div", { style: rowStyle },
           h("span", { style: kStyle }, "上次"),
@@ -958,7 +954,17 @@ window.__ModuleLoader__.load({
             style: Object.assign({}, btnBase, { marginLeft: "auto" }),
           }, busy ? "刷新中…" : "立即刷新")));
 
-      return h(React.Fragment, null, pill, pop ? badgePopupPortal(pillRef.current, pop) : null);
+      return h("div", {
+        ref: rootRef,
+        style: {
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "center",
+        }
+      }, [
+        pill,
+        open ? pop : null
+      ]);
     }
 
     function apply(ctx, switches) {
@@ -966,8 +972,8 @@ window.__ModuleLoader__.load({
         ctx.slots.register(
           { name: "conversation.session.header.actions", id: "qwen-voucher-badge", order: 12 },
           function QwenSlot(props) {
-            useSwitches();
-            if (!switches.qwen) return null;
+            const curSwitches = useSwitches();
+            if (curSwitches && curSwitches.qwen === false) return null;
             var el = VoucherBadge(props);
             return el === null ? placeholder("qwen") : el;
           }
@@ -1110,9 +1116,7 @@ window.__ModuleLoader__.load({
       const [failAt, setFailAt] = useState(0);
       const [refreshTick, setRefreshTick] = useState(0);
       const [, tick] = useState(0);
-      const pillRef = useRef(null);
-      const popRef = useRef(null);
-      const [pos, setPos] = useState({ top: 0, left: 0 });
+      const rootRef = useRef(null);
 
       useEffect(
         function () {
@@ -1193,19 +1197,19 @@ window.__ModuleLoader__.load({
       useEffect(
         function () {
           if (!open) return undefined;
-          const onDown = function (e) {
-            if (pillRef.current && pillRef.current.contains(e.target)) return;
-            if (popRef.current && popRef.current.contains(e.target)) return;
-            setOpen(false);
+          const handleOutsideClick = function (e) {
+            if (rootRef.current && !rootRef.current.contains(e.target)) {
+              setOpen(false);
+            }
           };
-          const onKey = function (e) {
+          const handleKeyDown = function (e) {
             if (e.key === "Escape") setOpen(false);
           };
-          document.addEventListener("pointerdown", onDown, true);
-          document.addEventListener("keydown", onKey);
+          win.addEventListener("mousedown", handleOutsideClick, true);
+          win.addEventListener("keydown", handleKeyDown, true);
           return function () {
-            document.removeEventListener("pointerdown", onDown, true);
-            document.removeEventListener("keydown", onKey);
+            win.removeEventListener("mousedown", handleOutsideClick, true);
+            win.removeEventListener("keydown", handleKeyDown, true);
           };
         },
         [open]
@@ -1217,7 +1221,7 @@ window.__ModuleLoader__.load({
       const stale = (snap && snap.error) || failAt > 0;
       const hasDual = dual && (dual.cn.total !== null || dual.gl.total !== null);
       const label = hasDual
-        ? "CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + "  │  GL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
+        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + "  │  GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
         : snap
           ? credits
             ? "WorkBuddy " + fmt(credits.total)
@@ -1240,10 +1244,6 @@ window.__ModuleLoader__.load({
         : "WorkBuddy credits badge";
 
       const openPop = function () {
-        if (pillRef.current) {
-          const b = pillRef.current.getBoundingClientRect();
-          setPos({ top: b.bottom + 6, left: Math.max(8, Math.min(b.left, (win.innerWidth || 1200) - 376)) });
-        }
         setOpen(function (v) {
           return !v;
         });
@@ -1269,7 +1269,6 @@ window.__ModuleLoader__.load({
         {
           type: "button",
           className: "agy-btn",
-          ref: pillRef,
           title: title,
           style: Object.assign({}, pillStyle, { opacity: stale ? 0.7 : 1 }),
           onClick: openPop,
@@ -1279,9 +1278,9 @@ window.__ModuleLoader__.load({
         }),
         hasDual
           ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: "10px" } },
-              h("span", null, "CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-")),
+              h("span", null, "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-")),
               h("span", { style: { opacity: 0.35, padding: "0 2px" }, "aria-hidden": "true" }, "│"),
-              h("span", null, "GL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-"))
+              h("span", null, "GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-"))
             )
           : h("span", null, label)
       );
@@ -1331,7 +1330,15 @@ window.__ModuleLoader__.load({
 
       const pop = h(
         "div",
-        { ref: popRef, style: Object.assign({}, popStyle, { top: pos.top, left: pos.left }) },
+        {
+          style: Object.assign({}, popStyle, {
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            zIndex: 10000,
+            width: "360px",
+          })
+        },
         h(
           "div",
           { style: { fontWeight: 700, marginBottom: "6px" } },
@@ -1406,7 +1413,17 @@ window.__ModuleLoader__.load({
         )
       );
 
-      return h(React.Fragment, null, pill, pop ? badgePopupPortal(pillRef.current, pop) : null);
+      return h("div", {
+        ref: rootRef,
+        style: {
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "center",
+        }
+      }, [
+        pill,
+        open ? pop : null
+      ]);
     }
 
     function apply(ctx, switches) {
@@ -1414,8 +1431,8 @@ window.__ModuleLoader__.load({
         return ctx.slots.register(
           { name: "conversation.session.header.actions", id: "workbuddy-credits-badge", order: 13 },
           function WorkBuddySlot(props) {
-            useSwitches();
-            if (!switches.workbuddy) return null;
+            const curSwitches = useSwitches();
+            if (curSwitches && curSwitches.workbuddy === false) return null;
             var el = WorkBuddyCreditsBadge(props);
             return el === null ? placeholder("workbuddy") : el;
           }
@@ -1484,7 +1501,6 @@ window.__ModuleLoader__.load({
 
     function CodexQuotaBadge(props) {
       var React = require("react");
-    var ReactDOM = require("react-dom");
       var h = React.createElement;
       var useState = React.useState;
       var useEffect = React.useEffect;
@@ -1500,10 +1516,7 @@ window.__ModuleLoader__.load({
       var tick = s3[0], setTick = s3[1];
       var s4 = useState(0);
       var nonce = s4[0], setNonce = s4[1];
-      var s5 = useState({ top: 0, left: 0 });
-      var pos = s5[0], setPos = s5[1];
-      var pillRef = useRef(null);
-      var popRef = useRef(null);
+      var rootRef = useRef(null);
 
       useEffect(function () {
         var alive = true;
@@ -1543,17 +1556,17 @@ window.__ModuleLoader__.load({
 
       useEffect(function () {
         if (!open) return undefined;
-        function onDown(e) {
-          if (pillRef.current && pillRef.current.contains(e.target)) return;
-          if (popRef.current && popRef.current.contains(e.target)) return;
-          setOpen(false);
+        function handleOutsideClick(e) {
+          if (rootRef.current && !rootRef.current.contains(e.target)) {
+            setOpen(false);
+          }
         }
         function onKey(e) { if (e.key === "Escape") setOpen(false); }
-        doc.addEventListener("pointerdown", onDown, true);
-        doc.addEventListener("keydown", onKey);
+        win.addEventListener("mousedown", handleOutsideClick, true);
+        win.addEventListener("keydown", onKey);
         return function () {
-          doc.removeEventListener("pointerdown", onDown, true);
-          doc.removeEventListener("keydown", onKey);
+          win.removeEventListener("mousedown", handleOutsideClick, true);
+          win.removeEventListener("keydown", onKey);
         };
       }, [open]);
 
@@ -1595,23 +1608,16 @@ window.__ModuleLoader__.load({
       var pill = h("button", {
         type: "button",
         className: "agy-btn",
-        ref: pillRef,
         title: wins.length === 0 ? String(snap.error || "") : wins.map(function (w) {
           return windowLabel(w.windowSeconds) + " 窗口剩余 " + fmtPct(w.remainingPercent) + (w.resetsAt ? "，重置 " + countdown(w.resetsAt) : "");
         }).join("\n") + "\n上次成功：" + ago(snap.at),
         style: pillStyle,
         onClick: function () {
-          if (pillRef.current) {
-            var b = pillRef.current.getBoundingClientRect();
-            setPos({ top: b.bottom + 6, left: Math.max(8, Math.min(b.left, (win.innerWidth || 1200) - 376)) });
-          }
           setOpen(function (v) { return !v; });
         },
       },
         h("span", { style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: color } }),
         h("span", null, label));
-
-      if (!open) return pill;
 
       var rows = wins.map(function (w) {
         return h("div", { key: "w" + w.windowSeconds, style: { display: "flex", gap: "8px", margin: "3px 0" } },
@@ -1624,33 +1630,45 @@ window.__ModuleLoader__.load({
       });
 
       var popStyle = {
-        position: "fixed",
-        zIndex: 2147483002,
+        position: "absolute",
+        top: "calc(100% + 6px)",
+        right: 0,
+        zIndex: 10000,
         width: "360px",
-        background: "var(--dsw-alias-bg-layer-1, #fff)",
+        background: "var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #18181b))",
         border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
         borderRadius: "10px",
-        boxShadow: "0 8px 24px rgba(0,0,0,.18)",
+        boxShadow: "0 10px 28px rgba(0,0,0,.35)",
         padding: "10px 12px",
         fontSize: "12px",
         color: "var(--dsw-alias-label-primary, inherit)",
-        top: pos.top,
-        left: pos.left,
+        cursor: "default",
       };
 
-      return h(React.Fragment, null, pill, badgePopupPortal(pillRef.current,
-        h("div", { ref: popRef, style: popStyle },
-          h("div", { style: { fontWeight: 700, marginBottom: "6px" } }, "Codex 订阅 · 额度" + (stale ? "（上次快照）" : "")),
-          rows,
-          snap.planType ? h("div", { style: { marginTop: "4px", opacity: 0.7 } }, "套餐：" + snap.planType) : null,
-          h("div", { style: { marginTop: "4px", opacity: 0.7 } }, "上次成功：" + ago(snap.at)),
-          snap.error ? h("div", { style: { marginTop: "4px", color: "#ef4444", wordBreak: "break-all" } }, String(snap.error).slice(0, 160)) : null,
-          h("div", { style: { marginTop: "8px", display: "flex", gap: "6px" } },
-            h("button", {
-              type: "button",
-              style: { padding: "2px 9px", borderRadius: "999px", fontSize: "11px", cursor: "pointer", border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3))", background: "transparent", color: "inherit" },
-              onClick: function () { setSnap(null); setNonce(function (n) { return n + 1; }); },
-            }, "立即刷新")))));
+      var pop = h("div", { style: popStyle },
+        h("div", { style: { fontWeight: 700, marginBottom: "6px" } }, "Codex 订阅 · 额度" + (stale ? "（上次快照）" : "")),
+        rows,
+        snap.planType ? h("div", { style: { marginTop: "4px", opacity: 0.7 } }, "套餐：" + snap.planType) : null,
+        h("div", { style: { marginTop: "4px", opacity: 0.7 } }, "上次成功：" + ago(snap.at)),
+        snap.error ? h("div", { style: { marginTop: "4px", color: "#ef4444", wordBreak: "break-all" } }, String(snap.error).slice(0, 160)) : null,
+        h("div", { style: { marginTop: "8px", display: "flex", gap: "6px" } },
+          h("button", {
+            type: "button",
+            style: { padding: "2px 9px", borderRadius: "999px", fontSize: "11px", cursor: "pointer", border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3))", background: "transparent", color: "inherit" },
+            onClick: function () { setSnap(null); setNonce(function (n) { return n + 1; }); },
+          }, "立即刷新")));
+
+      return h("div", {
+        ref: rootRef,
+        style: {
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "center",
+        }
+      }, [
+        pill,
+        open ? pop : null
+      ]);
     }
 
       function apply(ctx, switches) {
@@ -1658,8 +1676,8 @@ window.__ModuleLoader__.load({
           return ctx.slots.register(
             { name: "conversation.session.header.actions", id: "codex-quota-badge", order: 14 },
             function CodexQuotaBadgeSlot(props) {
-              useSwitches();
-              if (!switches.codex) return null;
+              const curSwitches = useSwitches();
+              if (curSwitches && curSwitches.codex === false) return null;
               var el = CodexQuotaBadge(Object.assign({}, props, { __ctx: ctx }));
               return el === null ? placeholder("codex") : el;
             }
@@ -1690,40 +1708,73 @@ window.__ModuleLoader__.load({
     }
     function zNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
-    /** 聚合：跨账号按 planName（模型）求和 remaining/total。 */
+    /** 聚合：跨账号按 planName（模型）求和 remaining/total。过滤无名/未知/企业账号。 */
     function zAggregate(accounts) {
       const byModel = new Map();
       for (const a of accounts || []) {
         const b = a && a.balance;
-        if (!b) continue;
+        if (!b || b.enterprise === true) continue;
         const buckets = Array.isArray(b.buckets) && b.buckets.length ? b.buckets : [b];
         for (const bk of buckets) {
-          const name = String((bk && bk.showName) || b.planName || "未知模型");
+          if (!bk) continue;
+          const rawName = (bk && bk.showName) || b.planName;
+          if (!rawName || typeof rawName !== "string") continue;
+          const name = rawName.trim();
+          if (!name || name === "未知模型" || name.toLowerCase() === "unknown") continue;
+          const rem = zNum(bk.remaining !== undefined ? bk.remaining : b.remaining);
+          const tot = zNum(bk.total !== undefined ? bk.total : b.total);
+          if (rem <= 0 && tot <= 0) continue;
+
           const cur = byModel.get(name) || { remaining: 0, total: 0, expiresAt: null };
-          cur.remaining += zNum(bk && bk.remaining !== undefined ? bk.remaining : b.remaining);
-          cur.total += zNum(bk && bk.total !== undefined ? bk.total : b.total);
-          const exp = Number(bk && bk.expiresAt) || Number(b.expiresAt) || 0;
+          cur.remaining += rem;
+          cur.total += tot;
+          const exp = Number(bk.expiresAt) || Number(b.expiresAt) || 0;
           if (exp && (!cur.expiresAt || exp < cur.expiresAt)) cur.expiresAt = exp;
           byModel.set(name, cur);
         }
       }
-      return Array.from(byModel.entries()).map(function (kv) { return { model: kv[0], remaining: kv[1].remaining, total: kv[1].total, expiresAt: kv[1].expiresAt }; });
+      return Array.from(byModel.entries())
+        .filter(function (kv) {
+          const name = kv[0];
+          const info = kv[1];
+          return name && name !== "未知模型" && (info.remaining > 0 || info.total > 0);
+        })
+        .map(function (kv) {
+          return { model: kv[0], remaining: kv[1].remaining, total: kv[1].total, expiresAt: kv[1].expiresAt };
+        });
     }
 
-    function zReadCache() { try { const j = JSON.parse(win2.localStorage.getItem(ZCACHE_KEY) || "null"); return j && j.models ? j : null; } catch (e) { return null; } }
+    function zReadCache() {
+      try {
+        const j = JSON.parse(win2.localStorage.getItem(ZCACHE_KEY) || "null");
+        if (j && Array.isArray(j.models)) {
+          j.models = j.models.filter(function (m) {
+            return m && m.model && m.model !== "未知模型" && (zNum(m.remaining) > 0 || zNum(m.total) > 0);
+          });
+        }
+        return j && j.models ? j : null;
+      } catch (e) {
+        return null;
+      }
+    }
     function zWriteCache(d) { try { win2.localStorage.setItem(ZCACHE_KEY, JSON.stringify(d)); } catch (e) { /* ignore */ } }
 
     function ZcodeQuotaBadge() {
       const { useState, useEffect, useRef } = React;
-      const [models, setModels] = useState(null);
-      const [at, setAt] = useState(0);
+      const h = React.createElement;
+      const [models, setModels] = useState(function () {
+        const c = zReadCache();
+        return c && c.models ? c.models : null;
+      });
+      const [at, setAt] = useState(function () {
+        const c = zReadCache();
+        return c && c.at ? c.at : 0;
+      });
       const [err, setErr] = useState(null);
       const [open, setOpen] = useState(false);
       const [busy, setBusy] = useState(false);
-      const [pos, setPos] = useState({ top: 0, left: 0 });
       const [, tick] = useState(0);
-      const pillRef = useRef(null);
-      const popRef = useRef(null);
+      const rootRef = useRef(null);
 
       const load = function () {
         setBusy(true);
@@ -1757,39 +1808,51 @@ window.__ModuleLoader__.load({
 
       useEffect(function () {
         if (!open) return undefined;
-        const onDown = function (e) { if (pillRef.current && pillRef.current.contains(e.target)) return; if (popRef.current && popRef.current.contains(e.target)) return; setOpen(false); };
+        const handleOutsideClick = function (e) {
+          if (rootRef.current && !rootRef.current.contains(e.target)) {
+            setOpen(false);
+          }
+        };
         const onKey = function (e) { if (e.key === "Escape") setOpen(false); };
-        document.addEventListener("pointerdown", onDown, true);
-        document.addEventListener("keydown", onKey);
-        return function () { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey); };
+        win2.addEventListener("mousedown", handleOutsideClick, true);
+        win2.addEventListener("keydown", onKey);
+        return function () {
+          win2.removeEventListener("mousedown", handleOutsideClick, true);
+          win2.removeEventListener("keydown", onKey);
+        };
       }, [open]);
 
       if (models === null) return null;
       if (models.length === 0 && !err) return null;
 
       const stale = Boolean(err);
-      const label = models.length === 0 ? "ZCode 无额度" : models.map(function (m) { return m.model + " " + zFmtTokens(m.remaining); }).join(" · ");
+      const label = models.length === 0 ? "ZCode 无额度" : "ZCode " + models.map(function (m) { return m.model + " " + zFmtTokens(m.remaining); }).join(" · ");
       const pct = models.length && models[0].total > 0 ? models[0].remaining / models[0].total : NaN;
       const color = !Number.isFinite(pct) ? "#94a3b8" : pct <= 0.2 ? "#ef4444" : pct <= 0.5 ? "#f59e0b" : "#10b981";
 
       const openPop = function () {
-        if (pillRef.current) {
-          const b = pillRef.current.getBoundingClientRect();
-          setPos({ top: b.bottom + 6, left: Math.max(8, Math.min(b.left, (win2.innerWidth || 1200) - 376)) });
-        }
         setOpen(function (v) { return !v; });
       };
 
-      const pill = h("button", { type: "button", className: "agy-btn", ref: pillRef,
+      const pill = h("button", { type: "button", className: "agy-btn",
         title: models.map(function (m) { return m.model + ": " + zFmtTokens(m.remaining) + " / " + zFmtTokens(m.total) + (m.expiresAt ? " · " + stamp(m.expiresAt) + "到期" : ""); }).join("\n") + (err ? "\n最近读取失败：" + err : ""),
         style: Object.assign({}, pillStyle, { opacity: stale ? 0.7 : 1 }),
         onClick: openPop },
         h("span", { style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: color } }),
         h("span", null, label)
       );
-      if (!open) return pill;
 
-      const pop = h("div", { ref: popRef, style: Object.assign({}, popStyle, { top: pos.top, left: pos.left }) },
+      const pop = h("div", {
+        style: Object.assign({}, popStyle, {
+          position: "absolute",
+          top: "calc(100% + 6px)",
+          right: 0,
+          zIndex: 10000,
+          width: "360px",
+          background: "var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #18181b))",
+          boxShadow: "0 10px 28px rgba(0,0,0,.35)",
+        })
+      },
         h("div", { style: { fontWeight: 700, marginBottom: "6px" } }, "ZCode 账号池 · 按模型聚合" + (stale ? "（离线快照）" : "")),
         models.map(function (m, i) {
           const p = m.total > 0 ? m.remaining / m.total : null;
@@ -1810,7 +1873,17 @@ window.__ModuleLoader__.load({
         )
       );
 
-      return h(React.Fragment, null, pill, pop ? badgePopupPortal(pillRef.current, pop) : null);
+      return h("div", {
+        ref: rootRef,
+        style: {
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "center",
+        }
+      }, [
+        pill,
+        open ? pop : null
+      ]);
     }
 
       function apply(ctx, switches) {
@@ -1818,8 +1891,8 @@ window.__ModuleLoader__.load({
           return ctx.slots.register(
             { name: "conversation.session.header.actions", id: "zcode-quota-badge", order: 15 },
             function ZcodeQuotaBadgeSlot(props) {
-              useSwitches();
-              if (!switches.zcode) return null;
+              const curSwitches = useSwitches();
+              if (curSwitches && curSwitches.zcode === false) return null;
               var el = ZcodeQuotaBadge(Object.assign({}, props, { __ctx: ctx }));
               return el === null ? placeholder("zcode") : el;
             }
