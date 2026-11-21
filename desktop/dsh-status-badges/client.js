@@ -76,6 +76,79 @@ window.__ModuleLoader__.load({
       if (!anchorEl || typeof document === "undefined") return jsx;
       return ReactDOM.createPortal(jsx, document.body);
     }
+    /* ══════ 共享工具块（1.4.1 顶层化）：五个胶囊统一引用 ══════ */
+    function fmt(n) {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return "-";
+      return v.toFixed(2);
+    }
+    function ago(ms) {
+      if (!ms) return "从未成功";
+      const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+      if (s < 60) return s + " 秒前";
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + " 分钟前";
+      const hh = Math.floor(m / 60);
+      if (hh < 24) return hh + " 小时前";
+      return Math.floor(hh / 24) + " 天前";
+    }
+    function countdown(ms) {
+      const t = Number(ms);
+      if (!Number.isFinite(t) || t <= 0) return "?";
+      const left = t - Date.now();
+      if (left <= 0) return "已过期";
+      const mins = Math.ceil(left / 60000);
+      const d = Math.floor(mins / 1440);
+      const hh = Math.floor((mins % 1440) / 60);
+      if (d > 0) return d + "天" + hh + "小时";
+      const mm = mins % 60;
+      if (hh > 0) return hh + "小时" + mm + "分";
+      return mm + "分钟";
+    }
+    function stamp(ms) {
+      const t = Number(ms);
+      if (!Number.isFinite(t) || t <= 0) return "?";
+      const d = new Date(t);
+      const p = (n) => (n < 10 ? "0" + n : "" + n);
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+    }
+    function dotColor(pct) {
+      if (!Number.isFinite(pct)) return "#94a3b8";
+      if (pct <= 20) return "#ef4444";
+      if (pct <= 50) return "#f59e0b";
+      return "#10b981";
+    }
+    const pillStyle = {
+      background: "var(--agy-bg-header, var(--dsw-alias-bg-layer-1, rgba(255,255,255,0.06)))",
+      border: "1px solid var(--agy-border-card, var(--dsw-alias-border-l1, rgba(255,255,255,0.12)))",
+      borderRadius: "999px",
+      cursor: "pointer",
+      padding: "3px 12px",
+      fontSize: "11.5px",
+      fontWeight: 600,
+      lineHeight: 1.5,
+      color: "var(--agy-text-primary, var(--dsw-alias-label-primary, inherit))",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "6px",
+      boxShadow: "var(--agy-shadow-sm, 0 1px 2px rgba(0,0,0,0.05))",
+      userSelect: "none",
+      whiteSpace: "nowrap",
+      flexShrink: 0,
+      outline: "none",
+    };
+    const popStyle = {
+      position: "fixed",
+      zIndex: 2147483002,
+      width: "360px",
+      background: "var(--dsw-alias-bg-layer-1, #fff)",
+      border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
+      borderRadius: "10px",
+      boxShadow: "0 8px 24px rgba(0,0,0,.18)",
+      padding: "10px 12px",
+      fontSize: "12px",
+      color: "var(--dsw-alias-label-primary, inherit)",
+    };
     // ===== agy =====
     var agyModule = (function (useSwitches, placeholder) {
 
@@ -637,12 +710,12 @@ window.__ModuleLoader__.load({
       if (!sel || !(sel.nominal > 0)) return null;
       return Math.max(0, Math.min(1, sel.balance / sel.nominal));
     }
-    function dotColor(r) {
+    function qwenDotColor(r) {
       if (r === null) return "#64748b";
       if (r <= 0.1) return "#ef4444";
       return "#10b981";
     }
-    function countdown(iso) {
+    function localCountdownIso(iso) {
       if (!iso) return "";
       const t = Date.parse(iso);
       if (!Number.isFinite(t)) return "";
@@ -683,7 +756,7 @@ window.__ModuleLoader__.load({
       if (!acc || acc.ok === false) return "#94a3b8";
       const sel = acc.selected || null;
       if (!sel) return "#64748b";
-      return dotColor(ratioOf(sel));
+      return qwenDotColor(ratioOf(sel));
     }
 
     const pillStyle = {
@@ -784,7 +857,7 @@ window.__ModuleLoader__.load({
         const sel = acc.selected || null;
         const head = segPrefix(acc, i).trim();
         if (!sel) return head + (acc.error ? "：读取失败 " + acc.error : "：无可用券");
-        return head + " · 券" + (sel.no ? " " + sel.no : "") + " · 余额 " + money(sel.balance) + " / 面值 " + money(sel.nominal) + "，失效 " + (sel.expiry || "?") + "（还剩 " + countdown(sel.expiry) + "）";
+        return head + " · 券" + (sel.no ? " " + sel.no : "") + " · 余额 " + money(sel.balance) + " / 面值 " + money(sel.nominal) + "，失效 " + (sel.expiry || "?") + "（还剩 " + localCountdownIso(sel.expiry) + "）";
       }).join("\n") + "\n上次成功：" + ago(st.at) + "，每 " + curInterval + " 分钟刷新";
 
       const openPop = () => {
@@ -837,7 +910,7 @@ window.__ModuleLoader__.load({
           rows.push(["券号", sel.no || sel.id]);
           rows.push(["余额", money(sel.balance) + " / " + money(sel.nominal) + "（" + Math.round((r ?? 0) * 100) + "%）"]);
           rows.push(["状态", sel.status + (acc.ok === false ? "（数据可能过期）" : "")]);
-          rows.push(["失效", (sel.expiry || "?") + "（还剩 " + countdown(sel.expiry) + "）"]);
+          rows.push(["失效", (sel.expiry || "?") + "（还剩 " + localCountdownIso(sel.expiry) + "）"]);
           if (sel.products) rows.push(["适用", sel.products]);
           if (sel.scenarios) rows.push(["场景", sel.scenarios]);
         }
@@ -950,41 +1023,6 @@ window.__ModuleLoader__.load({
     const INTERVALS = [5, 10, 30];
     const DEFAULT_MINUTES = 5;
 
-    function fmt(n) {
-      const v = Number(n);
-      if (!Number.isFinite(v)) return "-";
-      return v.toFixed(2);
-    }
-    function ago(ms) {
-      if (!ms) return "从未成功";
-      const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-      if (s < 60) return s + " 秒前";
-      const m = Math.floor(s / 60);
-      if (m < 60) return m + " 分钟前";
-      const hh = Math.floor(m / 60);
-      if (hh < 24) return hh + " 小时前";
-      return Math.floor(hh / 24) + " 天前";
-    }
-    function countdown(ms) {
-      const t = Number(ms);
-      if (!Number.isFinite(t) || t <= 0) return "?";
-      const left = t - Date.now();
-      if (left <= 0) return "已过期";
-      const mins = Math.ceil(left / 60000);
-      const d = Math.floor(mins / 1440);
-      const hh = Math.floor((mins % 1440) / 60);
-      if (d > 0) return d + "天" + hh + "小时";
-      const mm = mins % 60;
-      if (hh > 0) return hh + "小时" + mm + "分";
-      return mm + "分钟";
-    }
-    function stamp(ms) {
-      const t = Number(ms);
-      if (!Number.isFinite(t) || t <= 0) return "?";
-      const d = new Date(t);
-      const p = (n) => (n < 10 ? "0" + n : "" + n);
-      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
-    }
     function num(v) {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
@@ -1046,37 +1084,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    const pillStyle = {
-      background: "var(--agy-bg-header, var(--dsw-alias-bg-layer-1, rgba(255,255,255,0.06)))",
-      border: "1px solid var(--agy-border-card, var(--dsw-alias-border-l1, rgba(255,255,255,0.12)))",
-      borderRadius: "999px",
-      cursor: "pointer",
-      padding: "3px 12px",
-      fontSize: "11.5px",
-      fontWeight: 600,
-      lineHeight: 1.5,
-      color: "var(--agy-text-primary, var(--dsw-alias-label-primary, inherit))",
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "6px",
-      boxShadow: "var(--agy-shadow-sm, var(--dsw-elevation-soft, 0 1px 2px rgba(0,0,0,0.05)))",
-      userSelect: "none",
-      whiteSpace: "nowrap",
-      outline: "none",
-      flexShrink: 0,
-    };
-    const popStyle = {
-      position: "fixed",
-      zIndex: 2147483002,
-      width: "360px",
-      background: "var(--dsw-alias-bg-layer-1, #fff)",
-      border: "1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))",
-      borderRadius: "10px",
-      boxShadow: "0 8px 24px rgba(0,0,0,.18)",
-      padding: "10px 12px",
-      fontSize: "12px",
-      color: "var(--dsw-alias-label-primary, inherit)",
-    };
+
+
     const rowStyle = { display: "flex", gap: "8px", margin: "3px 0" };
     const kStyle = { opacity: 0.6, flex: "0 0 74px" };
     const vStyle = { flex: 1, wordBreak: "break-all" };
@@ -1461,15 +1470,6 @@ window.__ModuleLoader__.load({
       return Number.isFinite(n) ? Math.round(n) + "%" : "-";
     }
 
-    function ago(ms) {
-      if (!ms) return "从未成功";
-      var s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-      if (s < 60) return s + " 秒前";
-      var m = Math.floor(s / 60);
-      if (m < 60) return m + " 分钟前";
-      var hh = Math.floor(m / 60);
-      return hh < 24 ? hh + " 小时前" : Math.floor(hh / 24) + " 天前";
-    }
 
     function windowLabel(seconds) {
       var s = Number(seconds);
@@ -1480,25 +1480,7 @@ window.__ModuleLoader__.load({
       return d + "d";
     }
 
-    function countdown(ms) {
-      var t = Number(ms);
-      if (!Number.isFinite(t) || t <= 0) return "";
-      var left = t - Date.now();
-      if (left <= 0) return "即将重置";
-      var mins = Math.ceil(left / 60000);
-      var d = Math.floor(mins / 1440);
-      var hh = Math.floor((mins % 1440) / 60);
-      if (d > 0) return d + "天" + hh + "小时";
-      var mm = mins % 60;
-      return hh > 0 ? hh + "小时" + mm + "分" : mm + "分钟";
-    }
 
-    function dotColor(pct) {
-      if (!Number.isFinite(pct)) return "#94a3b8";
-      if (pct <= 20) return "#ef4444";
-      if (pct <= 50) return "#f59e0b";
-      return "#10b981";
-    }
 
     function CodexQuotaBadge(props) {
       var React = require("react");
