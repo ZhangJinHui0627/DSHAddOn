@@ -1,6 +1,6 @@
 {
   "name": "dsh-status-badges",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "五个对话顶栏状态徽章合为一个插件：Antigravity 额度、千问代金券、WorkBuddy 积分（国内/国际双区）、Codex 额度、ZCode 账号池按模型聚合额度，每个可单独开关。",
   "type": "module",
   "license": "MIT",

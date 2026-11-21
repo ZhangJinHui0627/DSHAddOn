@@ -876,10 +876,18 @@ window.__ModuleLoader__.load({
           .finally(() => setSaving(null));
       };
 
+      const overallDot = (function () {
+        let worst = "#10b981";
+        for (const a of accs) {
+          if (!a || a.ok === false || a.configured === false) return "#ef4444";
+          const c = segDot(a);
+          if (c === "#f59e0b" && worst !== "#ef4444") worst = "#f59e0b";
+        }
+        return worst;
+      })();
       const kids = [];
-      accs.forEach((acc, i) => {
-        if (i > 0) kids.push(h("span", { key: "gap" + i, style: { display: "inline-block", width: SEG_GAP + "px" } }));
-        kids.push(h("span", { key: "dot" + i, style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: segDot(acc) } }));
+      accs.forEach(function (acc, i) {
+        if (i > 0) kids.push(h("span", { key: "sep" + i, style: { opacity: 0.55, margin: "0 2px" }, "aria-hidden": "true" }, "·"));
         kids.push(h("span", { key: "txt" + i }, segText(acc, i)));
       });
       const pill = h("button", {
@@ -888,7 +896,7 @@ window.__ModuleLoader__.load({
         title: title,
         style: Object.assign({}, pillStyle, { opacity: stale ? 0.65 : 1 }),
         onClick: openPop,
-      }, kids);
+      }, [h("span", { key: "overallDot", style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: overallDot, flexShrink: 0 } })].concat(kids));
 
       const blocks = accs.map((acc, i) => {
         const rows = [];
@@ -1221,7 +1229,7 @@ window.__ModuleLoader__.load({
       const stale = (snap && snap.error) || failAt > 0;
       const hasDual = dual && (dual.cn.total !== null || dual.gl.total !== null);
       const label = hasDual
-        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + "  │  GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
+        ? "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-") + " · GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-")
         : snap
           ? credits
             ? "WorkBuddy " + fmt(credits.total)
@@ -1277,11 +1285,7 @@ window.__ModuleLoader__.load({
           style: { display: "inline-block", width: "7px", height: "7px", borderRadius: "50%", background: color },
         }),
         hasDual
-          ? h("span", { style: { display: "inline-flex", alignItems: "center", gap: "10px" } },
-              h("span", null, "WorkBuddy CN " + (dual.cn.total !== null ? fmt(dual.cn.total) : "-")),
-              h("span", { style: { opacity: 0.35, padding: "0 2px" }, "aria-hidden": "true" }, "│"),
-              h("span", null, "GLOBAL " + (dual.gl.total !== null ? fmt(dual.gl.total) : "-"))
-            )
+          ? h("span", null, label)
           : h("span", null, label)
       );
 
