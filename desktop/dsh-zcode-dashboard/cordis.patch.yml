@@ -1,0 +1,5 @@
+# dsh-zcode-dashboard bundle patch
+#
+# 纯 UI 壳：不声明 provider / 不改路由。此文件仅为满足宿主
+# dsh.bundle 声明（profile layer 识别），空列表 = 不修改宿主配置。
+- insert: []
