@@ -1,0 +1,1951 @@
+/**
+ * dsh-zcode-dashboard — ZCode 账号池仪表盘（纯 UI 壳）
+ *
+ * 原理：dsh-zcode-startplan 已在 /api/zcode-start-plan/* 暴露完整的账号池管理 API
+ * （loopback 防护 + 无凭据出网关 + 参数校验，见原插件 lib/manage-routes.js），
+ * 但其账号池 UI 只在原插件详情页可见。本插件把同源 UI 提升到三个位置：
+ *   1. settings.section —— 设置页专属图形面板（agy-link 同款）；
+ *   2. plugins.bundle.config（key=dsh-zcode-dashboard）—— 本插件详情页内嵌面板；
+ *   3. sidebar.panellist + main —— 侧栏专属入口 + 全页（workbuddy 同款）。
+ *
+ * ## 安全边界（重要）
+ * - 零新增路由、零凭据处理：所有 fetch 仅指向原插件的 /api/zcode-start-plan/*；
+ * - 全程 React createElement 渲染，无 innerHTML / dangerouslySetInnerHTML；
+ * - 破坏性操作（移除账号/清除限流）沿用原插件的二次确认交互；
+ * - 原插件停用/未安装时显示明确错误，不重试风暴。
+ *
+ * UI 组件移植自 dsh-zcode-startplan（© 原作者，见 THIRD-PARTY.md 引用），
+ * 类名前缀 zsp 保留以便样式一致。
+ */
+window.__ModuleLoader__.load({
+  id: 'dsh-zcode-dashboard',
+  factory(require) {
+    const React = require('react')
+    const h = React.createElement
+    const { useCallback, useEffect, useRef, useState } = React
+
+    const SLOT_CONFIG = 'plugins.bundle.config'
+    const BUNDLE_KEY = 'dsh-zcode-dashboard'
+    const API = '/api/zcode-start-plan'
+    const MAIN_PAGE_KEY = 'zcode-dashboard-page'
+    const CONFIRM_RESET_MS = 3000
+
+    /** 降级空 disposer。 */
+    const NOOP_DISPOSER = () => {}
+
+    /** 单个贡献失败不影响其余（workbuddy 同款）。 */
+    function guardContribution(label, run) {
+      try {
+        return run()
+      } catch (error) {
+        console.error('[dsh-zcode-dashboard] contribution failed (' + label + '):', error)
+        return undefined
+      }
+    }
+
+
+    const CSS = `
+      .zsp-panel{display:flex;flex-direction:column;gap:10px;width:100%;min-width:0;color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:18px}
+      .zsp-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+      .zsp-title{margin:0;font-size:13px;font-weight:600;line-height:20px}
+      .zsp-muted{color:var(--dsw-alias-label-tertiary);font-size:12px;word-break:break-word;min-width:0}
+      .zsp-spacer{flex:1}
+      .zsp-btn{font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm,6px);color:var(--dsw-alias-label-primary);background:transparent;padding:3px 10px;font-size:12px;line-height:18px;flex:none}
+      .zsp-btn:hover:enabled{background:var(--dsw-alias-interactive-bg-hover)}
+      .zsp-btn:disabled{cursor:default;opacity:.55}
+      .zsp-btn:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+      .zsp-btn[data-danger=true]{color:var(--dsw-alias-label-danger)}
+      .zsp-error{color:var(--dsw-alias-label-danger);margin:0;font-size:12px;word-break:break-word}
+      .zsp-ok{color:var(--dsw-alias-state-success-primary);font-size:12px;word-break:break-word;margin:0}
+      .zsp-card{display:flex;flex-direction:column;gap:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:8px;padding:10px 12px;min-width:0}
+      .zsp-card[data-hidden=true]{opacity:.62}
+      .zsp-group{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:10px 12px;min-width:0}
+      .zsp-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+      .zsp-dot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-tertiary);flex:none}
+      .zsp-dot[data-on=true]{background:var(--dsw-alias-state-success-primary)}
+      .zsp-name{font-weight:600}
+      .zsp-name-edit{font:inherit;font-weight:600;color:inherit;background:transparent;border:0;padding:0;cursor:text;text-align:left}
+      .zsp-name-edit:hover:enabled{text-decoration:underline dotted var(--dsw-alias-label-tertiary)}
+      .zsp-name-edit:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+      .zsp-name-input{font:inherit;font-weight:600;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-state-business-primary);border-radius:4px;padding:1px 6px;width:180px;max-width:100%}
+      .zsp-name-input:focus-visible{outline:none}
+      .zsp-chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:1px 8px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}
+      /* 探测到的 plan_id：只读展示（没有手输路径，见 ClaimSection 渲染处注释）。 */
+      .zsp-plan-id{font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:4px;padding:1px 6px;user-select:all}
+      /* 重启指引块：说明 + 可复制的启动命令。 */
+      .zsp-restart-guide{display:flex;flex-direction:column;gap:4px;min-width:0}
+      .zsp-restart-guide .zsp-plan-id{font-size:12px;line-height:20px;align-self:flex-start;max-width:100%;white-space:pre-wrap;word-break:break-all}
+      .zsp-chip[data-limited=true]{color:var(--dsw-alias-label-danger);border-color:var(--dsw-alias-label-danger)}
+      /* 风控痕迹（1.0.2）：橙黄提示，与「额度用尽」的红色刻意区分 —— 风控不是没额度。 */
+      .zsp-chip[data-risk=true]{color:var(--dsw-alias-label-warning,#b8860b);border-color:var(--dsw-alias-label-warning,#b8860b);cursor:pointer;background:transparent;font:inherit;font-size:11px;line-height:16px}
+      .zsp-chip[data-risk=true]:hover{background:var(--dsw-alias-fill-secondary,rgba(127,127,127,.18))}
+      .zsp-chip[data-risk=true]:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
+      .zsp-chip[data-risk=true]:disabled{cursor:default;opacity:.55}
+      .zsp-chip-x{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin:0 -3px 0 0;padding:0;border:0;border-radius:999px;background:transparent;color:inherit;font-size:11px;line-height:1;cursor:pointer}
+      .zsp-chip-x:hover{background:var(--dsw-alias-fill-secondary,rgba(127,127,127,.18))}
+      .zsp-chip-x:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}
+      .zsp-chip-x:disabled{cursor:default;opacity:.5}
+      .zsp-bar{height:6px;border-radius:3px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;width:100%}
+      .zsp-bar>span{display:block;height:100%;background:var(--dsw-alias-state-business-primary)}
+      /**
+       * 未生效额度：同一条进度条，但**用条纹 + 半透明**区分「还没到点的钱」，
+       * 避免与已生效的满格条混淆（满格实色 = 现在就能用）。
+       */
+      .zsp-meter{display:flex;flex-direction:column;gap:4px;min-width:0}
+      .zsp-meter-caption{margin:0}
+      .zsp-bar[data-pending=true]{background:repeating-linear-gradient(45deg,var(--dsw-alias-bg-layer-2) 0 4px,var(--dsw-alias-border-l1) 4px 8px)}
+      .zsp-bar[data-pending=true]>span{background:var(--dsw-alias-state-business-primary);opacity:.45}
+      .zsp-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+      .zsp-add{display:flex;flex-direction:column;gap:8px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;padding:10px 12px;min-width:0}
+      .zsp-link{color:var(--dsw-alias-state-business-primary);word-break:break-all}
+      .zsp-select{position:relative;display:inline-flex;min-width:0}
+      .zsp-select-trigger{display:inline-flex;align-items:center;gap:8px;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm,6px);color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);padding:4px 10px;font-size:12px;line-height:18px;min-width:0}
+      .zsp-select-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}
+      .zsp-select-trigger:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+      .zsp-select-trigger[aria-expanded=true]{border-color:var(--dsw-alias-state-business-primary)}
+      .zsp-select-label{font-weight:600;white-space:nowrap}
+      .zsp-select-desc{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap}
+      .zsp-caret{flex:none;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--dsw-alias-label-tertiary);transition:transform .15s ease}
+      .zsp-select-trigger[aria-expanded=true] .zsp-caret{transform:rotate(180deg)}
+      .zsp-select-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:30;display:flex;flex-direction:column;gap:2px;min-width:100%;max-height:260px;overflow:auto;padding:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 8px 24px rgb(0 0 0 / 18%);animation:zsp-pop .14s ease}
+      @keyframes zsp-pop{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+      .zsp-option{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;border:0;background:transparent;text-align:left;width:100%}
+      .zsp-option:hover,.zsp-option[data-active=true]{background:var(--dsw-alias-interactive-bg-hover)}
+      .zsp-option[aria-selected=true]{background:var(--dsw-alias-interactive-bg-selected,var(--dsw-alias-interactive-bg-hover))}
+      .zsp-option-check{flex:none;color:var(--dsw-alias-state-business-primary);font-size:12px;visibility:hidden}
+      .zsp-option[aria-selected=true] .zsp-option-check{visibility:visible}
+      .zsp-option-text{display:flex;flex-direction:column;min-width:0}
+      .zsp-badge{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:10px;font-weight:700;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+      .zsp-toggle-row{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px}
+      /**
+       * 三颗开关同列（不贴边）：卡片开关留在卡片内的自然位置（距卡片边框
+       * 12px，缩进 1+12+1+12=26px）；统一行比卡片少一层卡片边框+内边距
+       * （13px），补 13px 内边距对齐到同一条竖线。
+       */
+      .zsp-unified{padding-right:13px}
+      /* ── API Keys 管理区（0.9.8 重构）────────────────────────────── */
+      .zsp-btn[data-primary=true]{background:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary);color:#fff}
+      .zsp-btn[data-primary=true]:hover:enabled{opacity:.88}
+      /* 武装中的删除按钮：实底危险色，让「再点一次才删」的态势一眼可见。 */
+      .zsp-btn[data-confirm=true]{background:var(--dsw-alias-label-danger);border-color:var(--dsw-alias-label-danger);color:#fff}
+      /* 分段选择（限额预设）选中态：描边 + 主色文字，不抢实底按钮的权重。 */
+      .zsp-btn[data-selected=true]{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}
+      .zsp-keycard{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);border-radius:8px;padding:10px 12px;min-width:0}
+      .zsp-keycard[data-disabled=true]{opacity:.62}
+      .zsp-keyhead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+      .zsp-keydate{color:var(--dsw-alias-label-tertiary);font-size:11px;flex:none}
+      .zsp-meter-block{display:flex;flex-direction:column;gap:3px;min-width:0}
+      /* 用量 ≥90%：进度条转危险色 —— 「快用完」要在扫一眼就看到。 */
+      .zsp-bar[data-hot=true]>span{background:var(--dsw-alias-label-danger)}
+      /* 新 key 明文 token 的强调卡：成功色描边，明文等宽可全选。 */
+      .zsp-token-card{display:flex;flex-direction:column;gap:6px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:8px;background:var(--dsw-alias-bg-layer-1);padding:10px 12px;min-width:0}
+      .zsp-token-value{font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:12px;line-height:18px;user-select:all;word-break:break-all;background:var(--dsw-alias-bg-layer-2);border-radius:4px;padding:3px 8px}
+      .zsp-empty{display:flex;flex-direction:column;gap:8px;align-items:flex-start;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;padding:14px 12px}
+      .zsp-quotafield{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+      .zsp-quota-input{font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:2px 8px;width:130px}
+      .zsp-quota-input:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}
+      .zsp-count{display:inline-flex;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:0 8px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);flex:none}
+      .zsp-toggle{position:relative;display:inline-block;flex:none;width:30px;height:17px;margin-left:auto}
+      .zsp-toggle input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+      .zsp-toggle-track{position:absolute;inset:0;border-radius:999px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);transition:background .15s ease,border-color .15s ease;pointer-events:none}
+      .zsp-toggle-track::after{content:'';position:absolute;top:1px;left:1px;width:13px;height:13px;border-radius:50%;background:var(--dsw-alias-label-primary);transition:transform .15s ease}
+      .zsp-toggle input:checked + .zsp-toggle-track{background:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary)}
+      .zsp-toggle input:checked + .zsp-toggle-track::after{transform:translateX(13px);background:#fff}
+      .zsp-toggle input:focus-visible + .zsp-toggle-track{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+      .zsp-toggle input:disabled{cursor:default}
+      .zsp-toggle input:disabled + .zsp-toggle-track{opacity:.5}
+      /**
+       * 模型栏旁的「当前使用账号」：样式**内联写在组件里**（照 workbuddy），
+       * 这里只留一条 hover 反馈 —— 面板 CSS 与 composer 是两套上下文，
+       * 内联样式不会因为 <style> 注入时机而闪一下默认外观。
+       */
+      .zsp-route:hover{color:var(--dsw-alias-label-primary)}
+      .zsp-route[data-state="exhausted"]{color:var(--dsw-alias-label-danger,#d9534f)}
+      .zsp-route[data-state="exhausted"]:hover{color:var(--dsw-alias-label-danger,#d9534f)}
+      /* 风控痕迹：橙黄而不是红 —— 账号没坏、也不是没额度，只是被上游拦过一次。 */
+      .zsp-route[data-state="risk"]{color:var(--dsw-alias-label-warning,#b8860b)}
+      .zsp-route[data-state="risk"]:hover{color:var(--dsw-alias-label-warning,#b8860b)}
+      .zsp-route:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}
+      @media (max-width: 520px){
+        .zsp-head{gap:6px}
+        .zsp-title{font-size:12.5px}
+        .zsp-card{padding:8px 10px}
+        .zsp-add{padding:8px 10px}
+        .zsp-actions{gap:4px}
+      }
+    `
+
+    /** 同源 API 调用；非 2xx 抛出服务端给的可读 error。 */
+    async function api(path, body) {
+      const init =
+        body === undefined
+          ? {}
+          : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+      const response = await fetch(API + path, init)
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`)
+      }
+      return data
+    }
+
+    /**
+     * 开关（iOS 风格）：「模型列表里显示这一栏」的每栏右侧开关。
+     * checked = 显示；原生 checkbox 保证可访问性（键盘/读屏）。
+     * `label` 覆盖 aria-label（自动领取拨盘用它，不然读屏会念成「模型列表」）。
+     */
+    function Toggle(props) {
+      const { checked, disabled, onChange, label } = props
+      return h(
+        'label',
+        { className: 'zsp-toggle' },
+        h('input', {
+          type: 'checkbox',
+          checked: checked === true,
+          disabled,
+          'aria-label': label ?? '在模型列表中显示这一栏',
+          onChange: (event) => onChange(event.target.checked),
+        }),
+        h('span', { className: 'zsp-toggle-track', 'aria-hidden': 'true' }),
+      )
+    }
+
+    /** 渠道显示名：直接用官方 provider id（zai / bigmodel），不做本地化称呼。 */
+    function channelLabel(channel) {
+      if (channel === 'zai') return 'zai'
+      if (channel === 'bigmodel') return 'bigmodel'
+      return channel === null || channel === undefined ? 'bigmodel' : String(channel)
+    }
+
+    function formatReset(resetAt) {
+      const ms = Number(resetAt)
+      if (!Number.isFinite(ms) || ms <= 0) return ''
+      return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+
+    /**
+     * 未生效额度的到点时间：跨天要带日期（「明天 23:00」看不出来是哪天），
+     * 今天内只显示时刻，与限额 chips 的风格一致。
+     */
+    function formatEffective(effectiveAt) {
+      const ms = Number(effectiveAt)
+      if (!Number.isFinite(ms) || ms <= 0) return ''
+      const date = new Date(ms)
+      const today = new Date()
+      const sameDay =
+        date.getFullYear() === today.getFullYear() &&
+        date.getMonth() === today.getMonth() &&
+        date.getDate() === today.getDate()
+      return sameDay
+        ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    }
+
+    /** 未生效额度的可读文案：`GLM-5.3-Flash 3亿 tokens` 之类。 */
+    function formatPendingUnits(pending) {
+      const units = Number(pending?.grantUnits)
+      if (!Number.isFinite(units) || units <= 0) return ''
+      if (units >= 100_000_000) return `${(units / 100_000_000).toFixed(units % 100_000_000 === 0 ? 0 : 1)}亿`
+      if (units >= 10_000) return `${Math.round(units / 10_000)}万`
+      return String(units)
+    }
+
+    /** token 数值的紧凑显示（总额度行用）：3.9亿 / 500万 / 8400。 */
+    function formatTokens(units) {
+      const n = Number(units)
+      if (!Number.isFinite(n)) return '0'
+      if (n >= 100_000_000) return `${(n / 100_000_000).toFixed(n % 100_000_000 === 0 ? 0 : 2)}亿`
+      if (n >= 10_000) return `${Math.round(n / 10_000)}万`
+      return String(Math.round(n))
+    }
+
+    /**
+     * 还多久到期，如「3 小时后」「12 分钟后」「2 天后」「已过期」。
+     *
+     * 为什么还要给相对时长：额度按自然日结算，看到的永远是「今天 23:59」这种
+     * 绝对时间，用户得心算「那还剩多久」。两者并排给，判断成本最低。
+     */
+    function formatRemaining(expiresAt, now = Date.now()) {
+      const ms = Number(expiresAt)
+      if (!Number.isFinite(ms) || ms <= 0) return ''
+      const diff = ms - now
+      if (diff <= 0) return '已过期'
+      const minutes = Math.floor(diff / 60_000)
+      if (minutes < 1) return '不到 1 分钟'
+      if (minutes < 60) return `${minutes} 分钟后`
+      const hours = Math.floor(minutes / 60)
+      if (hours < 24) {
+        const restMinutes = minutes % 60
+        return restMinutes === 0 ? `${hours} 小时后` : `${hours} 小时 ${restMinutes} 分后`
+      }
+      const days = Math.floor(hours / 24)
+      const restHours = hours % 24
+      return restHours === 0 ? `${days} 天后` : `${days} 天 ${restHours} 小时后`
+    }
+
+    /**
+     * 一条额度进度条（已生效 / 未生效共用同一形状）。
+     *
+     * 为什么共用一个组件：两种额度对用户是**同一件事的两种时态**——
+     * 已生效的现在就能用，未生效的到点就能用。形状一致，差别只在
+     * 条纹（`data-pending`）与底部那句提示。
+     *
+     * `remaining`/`total` 缺失时（未生效的只有 `grantUnits`）按满格画：
+     * 尚未启用的额度必然是 100% 剩余。
+     */
+    function QuotaMeter(props) {
+      const { remaining, total, planName, pending, effectiveAt, expiresAt } = props
+      const percent = pending === true
+        ? 100
+        : typeof total === 'number' && total > 0 && typeof remaining === 'number'
+          ? Math.max(0, Math.min(100, Math.round((remaining / total) * 100)))
+          : 0
+      /**
+       * 底部一句话：已生效 = 剩余 + 计划名 + 到期；未生效 = 何时启用 + 何时作废。
+       * 到期信息缺失（上游没给 / 已用光）时整段不出现，不留「undefined」。
+       */
+      const effectiveLabel = effectiveAt ? `${formatEffective(effectiveAt)} 起可用` : '待生效'
+      const expireLabel = expiresAt
+        ? `${formatEffective(expiresAt)} 到期（${formatRemaining(expiresAt)}）`
+        : ''
+      return h(
+        'div',
+        { className: 'zsp-meter' },
+        h(
+          'div',
+          { className: 'zsp-bar', 'data-pending': pending === true },
+          h('span', { style: { width: `${percent}%` } }),
+        ),
+        h(
+          'span',
+          { className: 'zsp-muted zsp-meter-caption' },
+          pending === true
+            ? `${effectiveLabel}${expireLabel ? ` · ${expireLabel}` : ''}`
+            : `剩余 ${remaining}/${total}${planName ? ` · ${planName}` : ''}${expireLabel ? ` · ${expireLabel}` : ''}`,
+        ),
+      )
+    }
+
+    /**
+     * 卡片标题行的可编辑昵称：点一下变输入框，Enter 提交 / Esc 或失焦取消。
+     * 什么都不填直接失焦 = 不改名。
+     */
+    function NicknameEdit(props) {
+      const { nickname, busy, onCommit } = props
+      const [editing, setEditing] = useState(false)
+      const [draft, setDraft] = useState(nickname)
+      const inputRef = useRef(undefined)
+
+      useEffect(() => {
+        if (editing === true) {
+          setDraft(nickname)
+          /** 进入编辑态后自动聚焦并全选，方便整段替换。 */
+          inputRef.current?.focus()
+          inputRef.current?.select()
+        }
+      }, [editing, nickname])
+
+      if (editing !== true) {
+        return h(
+          'button',
+          {
+            type: 'button',
+            className: 'zsp-name zsp-name-edit',
+            title: '点击重命名',
+            disabled: busy,
+            onClick: () => setEditing(true),
+          },
+          nickname,
+        )
+      }
+      return h('input', {
+        ref: inputRef,
+        className: 'zsp-name-input',
+        value: draft,
+        disabled: busy,
+        maxLength: 40,
+        'aria-label': '账号备注',
+        onChange: (event) => setDraft(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key === 'Enter') {
+            const next = draft.trim()
+            if (next.length > 0 && next !== nickname) onCommit(next)
+            setEditing(false)
+          } else if (event.key === 'Escape') {
+            setEditing(false)
+          }
+        },
+        onBlur: () => setEditing(false),
+      })
+    }
+    /**
+     * OpenAI 兼容端点状态行（0.9.5）：网关常开，鉴权只认分发 key（面板下方生成）。
+     * 这里只显示运行状态与 baseURL；开关保留给「彻底关闭网关」的场景。
+     */
+    function OpenAiGatewaySection(props) {
+      const { gateway, busy, onChanged } = props
+      const [toggling, setToggling] = useState(false)
+      if (gateway === undefined) return null
+      const effectiveOn = gateway.running === true
+
+      const toggle = async () => {
+        setToggling(true)
+        try {
+          await api('/openai-gateway', { enabled: gateway.enabledInSettings !== true })
+          if (typeof onChanged === 'function') await onChanged()
+        } finally {
+          setToggling(false)
+        }
+      }
+
+      return h(
+        'div',
+        { className: 'zsp-group' },
+        h(
+          'div',
+          { className: 'zsp-row' },
+          h('span', { className: 'zsp-dot', 'data-on': effectiveOn }),
+          h('span', { className: 'zsp-name' }, 'OpenAI 兼容端点'),
+          h(
+            'span',
+            { className: 'zsp-muted', style: { flex: '1 1 auto', minWidth: 0 } },
+            effectiveOn ? `运行中 · ${gateway.baseUrl ?? ''}` : '未运行（重启宿主后生效）',
+          ),
+          h(
+            'span',
+            { className: 'zsp-toggle-row' },
+            h(Toggle, { checked: gateway.enabledInSettings === true, disabled: busy || toggling, onChange: () => void toggle() }),
+          ),
+        ),
+      )
+    }
+
+    /**
+     * 分发 key 管理区（0.9.8 重构：现代 API key 控制台形态）。
+     *
+     * 设计参照通行模式（OpenAI/Anthropic/Linear 控制台同款）：
+     * - **卡片化列表**：每把 key 一张卡 —— 名字 + 状态 chip + 创建日期一行，
+     *   用量进度条一行，操作按钮一行；不再是一条扁平行塞 7 个控件；
+     * - **用量可视化**：已用/限额的进度条，≥90% 转危险色；不限额只显示已用；
+     * - **限额预设分段选择**（100万/500万/2000万/不限）+ 自定义输入，取代
+     *   旧版 ±100 万步进（要调到 4.2 亿得点 420 次）；
+     * - **创建后一次性 token 强调卡**：成功色描边 + 「复制」按钮（clipboard）
+     *   + 「我已保存」关闭 —— 明文只此一面，复制即忘；
+     * - **两步删除确认**：第一次点变实底危险「确认删除」，3 秒不点自动回退；
+     * - 创建表单**折叠**进「+ 新建 API Key」按钮，平时不占面板空间。
+     *
+     * ⚠ token 明文**只在创建响应里出现一次**（服务端契约：列表永不下发 token）。
+     * ⚠ CRUD 请求体必须带 `id`（0.9.6 服务端契约）且失败冒泡成错误行（0.9.7）。
+     */
+    function DistributionKeysSection(props) {
+      const { keys, accounts, busy, onChanged } = props
+      const [creating, setCreating] = useState(false)
+      /** 新建表单展开态（平时折叠，面板不再被三个空输入框占一行）。 */
+      const [formOpen, setFormOpen] = useState(false)
+      const [newName, setNewName] = useState('')
+      const [newQuota, setNewQuota] = useState('')
+      const [newAccount, setNewAccount] = useState('')
+      const [freshToken, setFreshToken] = useState(undefined)
+      const [copied, setCopied] = useState(false)
+      /** CRUD 失败的错误行（此前 catch 后静默，按钮「没反应」无从排查）。 */
+      const [opError, setOpError] = useState(undefined)
+      /** 两步删除：武装中的 key id（3 秒不确认自动回退，CONFIRM_RESET_MS）。 */
+      const [confirmDeleteId, setConfirmDeleteId] = useState(undefined)
+      /** 每把 key 的限额编辑态（点「限额」进入，Escape/确认退出）。 */
+      const [editingQuotaId, setEditingQuotaId] = useState(undefined)
+      const [editingQuotaValue, setEditingQuotaValue] = useState('')
+
+      useEffect(() => {
+        if (confirmDeleteId === undefined) return undefined
+        const timer = setTimeout(() => setConfirmDeleteId(undefined), CONFIRM_RESET_MS)
+        return () => clearTimeout(timer)
+      }, [confirmDeleteId])
+
+      const create = async () => {
+        setCreating(true)
+        setOpError(undefined)
+        try {
+          const response = await fetch(`${API}/distribution-keys?op=create`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              name: newName,
+              quotaTotal: newQuota.trim().length > 0 ? Number(newQuota) : null,
+              accountId: newAccount.length > 0 ? newAccount : null,
+            }),
+          })
+          const data = await response.json().catch(() => ({}))
+          if (response.ok && typeof data?.key?.token === 'string') {
+            setFreshToken(data.key.token)
+            setCopied(false)
+            setNewName(''); setNewQuota(''); setNewAccount('')
+            setFormOpen(false)
+            if (typeof onChanged === 'function') await onChanged()
+          } else {
+            setOpError(typeof data?.error === 'string' ? data.error : `创建失败（HTTP ${response.status}）`)
+          }
+        } catch (error) {
+          setOpError(error instanceof Error ? error.message : String(error))
+        } finally {
+          setCreating(false)
+        }
+      }
+
+      /**
+       * CRUD 操作（禁用/启用、限额调节、删除）。
+       *
+       * ⚠ 0.9.6 的坑：调用点都改成了 `op(key.id, …)`，但这里的序列化键名
+       * 还是 `token` —— 服务端按 `body.id` 定位（token 已不下发），发出的
+       * body 里根本没有 `id` 键 ⇒ 永远 400「需要 id」。且此前 catch 后静默，
+       * 按钮看起来就是「没反应」。键名与服务端契约绑定，错误必须冒泡。
+       */
+      const op = async (id, opName, body = {}) => {
+        try {
+          const response = await fetch(`${API}/distribution-keys?op=${opName}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id, ...body }),
+          })
+          const data = await response.json().catch(() => ({}))
+          if (!response.ok || data?.ok !== true) {
+            throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`)
+          }
+          setOpError(undefined)
+          if (typeof onChanged === 'function') await onChanged()
+        } catch (error) {
+          setOpError(error instanceof Error ? error.message : String(error))
+        }
+      }
+
+      /** 复制新 key 明文（clipboard API 失败时降级：明文本就 user-select:all 可手动选）。 */
+      const copyFreshToken = async () => {
+        try {
+          await navigator.clipboard.writeText(freshToken)
+          setCopied(true)
+        } catch {
+          setCopied(false)
+        }
+      }
+
+      if (keys === undefined) return null
+      const keyList = Array.isArray(keys) ? keys : []
+      return h(
+        'div',
+        { className: 'zsp-group' },
+        /** 头部：标题 + 数量 chip + 新建按钮（表单折叠进它）。 */
+        h('div', { className: 'zsp-row' },
+          h('span', { className: 'zsp-name' }, 'API Keys'),
+          h('span', { className: 'zsp-count' }, `${keyList.length} 把`),
+          h('span', { className: 'zsp-muted', style: { flex: '1 1 auto' } },
+            '独立计量与限额；额度用尽即拒绝'),
+          h('button', {
+            className: 'zsp-btn',
+            'data-primary': formOpen !== true,
+            onClick: () => setFormOpen(formOpen !== true),
+            disabled: busy,
+          }, formOpen ? '收起' : '+ 新建 API Key'),
+        ),
+        formOpen === true
+          ? h('div', { className: 'zsp-add' },
+              h('input', { className: 'zsp-name-input', placeholder: '备注（给谁用）', value: newName, onChange: (e) => setNewName(e.target.value), style: { maxWidth: '200px' } }),
+              h('select', { className: 'zsp-name-input', value: newAccount, onChange: (e) => setNewAccount(e.target.value), style: { maxWidth: '220px' } },
+                h('option', { value: '' }, '不限账号（用整个池）'),
+                (accounts ?? []).map((a) => h('option', { key: a.id, value: a.id }, `#${a.index} ${a.nickname}`))),
+              h('div', { className: 'zsp-quotafield' },
+                h('span', { className: 'zsp-muted' }, '限额：'),
+                h('button', { className: 'zsp-btn', 'data-selected': newQuota === '', onClick: () => setNewQuota(''), disabled: busy }, '不限'),
+                [1_000_000, 5_000_000, 20_000_000].map((preset) =>
+                  h('button', {
+                    className: 'zsp-btn',
+                    'data-selected': newQuota === String(preset),
+                    key: preset,
+                    onClick: () => setNewQuota(String(preset)),
+                    disabled: busy,
+                  }, formatTokens(preset)),
+                ),
+                h('input', {
+                  className: 'zsp-quota-input',
+                  placeholder: '自定义 tokens',
+                  value: newQuota,
+                  onChange: (e) => setNewQuota(e.target.value.replace(/[^\d]/g, '')),
+                }),
+              ),
+              h('button', { className: 'zsp-btn', 'data-primary': true, onClick: () => void create(), disabled: busy || creating },
+                creating ? '生成中…' : '生成'),
+            )
+          : null,
+        /** 新 key 明文强调卡：只此一面，带复制 + 已保存关闭。 */
+        freshToken !== undefined
+          ? h('div', { className: 'zsp-token-card' },
+              h('span', { className: 'zsp-ok' }, '新 key 已生成 —— 现在复制保存，关闭后无法再次查看：'),
+              h('code', { className: 'zsp-token-value' }, freshToken),
+              h('div', { className: 'zsp-row' },
+                h('button', { className: 'zsp-btn', 'data-primary': copied !== true, onClick: () => void copyFreshToken() },
+                  copied ? '已复制 ✓' : '复制'),
+                h('button', { className: 'zsp-btn', onClick: () => setFreshToken(undefined) }, '我已保存'),
+              ),
+            )
+          : null,
+        opError !== undefined
+          ? h('div', { className: 'zsp-row' },
+              h('span', { className: 'zsp-error', 'data-error': 'true',
+                title: '点此忽略', onClick: () => setOpError(undefined) }, `分发 key 操作失败：${opError}`))
+          : null,
+        keyList.length === 0 && freshToken === undefined
+          ? h('div', { className: 'zsp-empty' },
+              h('span', { className: 'zsp-muted' }, '还没有 API Key —— 网关开启后，所有请求都需要一把 key 鉴权。'),
+              h('button', { className: 'zsp-btn', 'data-primary': true, onClick: () => setFormOpen(true), disabled: busy }, '生成第一把'),
+            )
+          : null,
+        keyList.map((key) => {
+          const used = (key.usage.inputTokens ?? 0) + (key.usage.outputTokens ?? 0)
+          const limited = key.quotaTotal !== null && key.quotaTotal !== undefined
+          const percent = limited && key.quotaTotal > 0 ? Math.min(100, Math.round((used / key.quotaTotal) * 100)) : 0
+          const hot = limited && percent >= 90
+          const accountName = key.accountId
+            ? ((accounts ?? []).find((a) => a.id === key.accountId)?.nickname ?? `#${String(key.accountId).slice(0, 8)}`)
+            : null
+          const confirmingDelete = confirmDeleteId === key.id
+          const editingQuota = editingQuotaId === key.id
+          return h('div', { key: key.id, className: 'zsp-keycard', 'data-disabled': key.enabled !== true },
+            /** 行 1：名字 + 状态 chip + 钉定 chip + 创建日期。 */
+            h('div', { className: 'zsp-keyhead' },
+              h('span', { className: 'zsp-dot', 'data-on': key.enabled === true }),
+              h('span', { className: 'zsp-name' }, key.name),
+              h('span', { className: 'zsp-chip', 'data-limited': key.enabled !== true }, key.enabled ? '启用' : '已禁用'),
+              accountName !== null ? h('span', { className: 'zsp-chip' }, `钉定 ${accountName}`) : null,
+              h('span', { className: 'zsp-spacer' }),
+              h('span', { className: 'zsp-keydate' },
+                `创建于 ${new Date(key.createdAt).toLocaleDateString([], { month: 'numeric', day: 'numeric' })}`),
+            ),
+            /** 行 2：用量进度条 + 数值。 */
+            h('div', { className: 'zsp-meter-block' },
+              h('div', { className: 'zsp-bar', 'data-hot': hot === true },
+                h('span', { style: { width: `${limited ? percent : Math.min(100, Math.round((used / 10_000_000) * 100))}%` } })),
+              h('span', { className: 'zsp-muted' },
+                limited
+                  ? `${formatTokens(used)} / ${formatTokens(key.quotaTotal)} tokens · ${key.usage.requests} 次请求`
+                  : `${formatTokens(used)} tokens 已用 · 不限额 · ${key.usage.requests} 次请求`),
+            ),
+            /** 行 3：操作。限额编辑态展开为预设分段 + 自定义输入；删除两步确认。 */
+            h('div', { className: 'zsp-actions' },
+              editingQuota
+                ? h('div', { className: 'zsp-quotafield' },
+                    h('button', { className: 'zsp-btn', 'data-selected': editingQuotaValue === '', onClick: () => setEditingQuotaValue(''), disabled: busy }, '不限'),
+                    [1_000_000, 5_000_000, 20_000_000].map((preset) =>
+                      h('button', {
+                        className: 'zsp-btn',
+                        'data-selected': editingQuotaValue === String(preset),
+                        key: preset,
+                        onClick: () => setEditingQuotaValue(String(preset)),
+                        disabled: busy,
+                      }, formatTokens(preset)),
+                    ),
+                    h('input', {
+                      className: 'zsp-quota-input',
+                      placeholder: '自定义 tokens',
+                      value: editingQuotaValue,
+                      onChange: (e) => setEditingQuotaValue(e.target.value.replace(/[^\d]/g, '')),
+                    }),
+                    h('button', {
+                      className: 'zsp-btn', 'data-primary': true, disabled: busy,
+                      onClick: () => {
+                        void op(key.id, 'update', { quotaTotal: editingQuotaValue.trim().length > 0 ? Number(editingQuotaValue) : null })
+                        setEditingQuotaId(undefined)
+                      },
+                    }, '保存'),
+                    h('button', { className: 'zsp-btn', onClick: () => setEditingQuotaId(undefined) }, '取消'),
+                  )
+                : h('button', {
+                    className: 'zsp-btn', disabled: busy,
+                    onClick: () => { setEditingQuotaId(key.id); setEditingQuotaValue(key.quotaTotal === null || key.quotaTotal === undefined ? '' : String(key.quotaTotal)) },
+                  }, `限额：${limited ? formatTokens(key.quotaTotal) : '不限'}`),
+              h('button', {
+                className: 'zsp-btn', disabled: busy,
+                onClick: () => void op(key.id, 'update', { enabled: key.enabled !== true }),
+              }, key.enabled ? '禁用' : '启用'),
+              h('span', { className: 'zsp-spacer' }),
+              confirmingDelete
+                ? h('button', {
+                    className: 'zsp-btn', 'data-confirm': true, disabled: busy,
+                    onClick: () => { setConfirmDeleteId(undefined); void op(key.id, 'delete') },
+                  }, '确认删除？')
+                : h('button', {
+                    className: 'zsp-btn', 'data-danger': true, disabled: busy,
+                    onClick: () => setConfirmDeleteId(key.id),
+                  }, '删除'),
+            ),
+          )
+        }),
+      )
+    }
+
+    /**
+     * 赠送额度领取区（面板底部）。
+     *
+     * ## 为什么不是「先查列表再点领取」
+     *
+     * 2026-10-28 分析官方 ZCode 客户端日志（2962 次 RPC）得出：
+     *
+     * | RPC | 全天调用次数 |
+     * |---|---|
+     * | `coding-plan-subscription.getManualClaimPlanPreviews`（`/billing/preview`） | **0** |
+     * | `coding-plan-subscription.claimManualPlan`（`/billing/claim`） | 1（用户点击时） |
+     *
+     * 官方客户端**从不预判有没有活动**：它直接发 claim，用服务端返回的
+     * `code`/`msg` 告诉用户结果。我们此前的「先查 preview，有才显示按钮」
+     * 导致面板永远显示「暂无可领取」——因为 preview 恒空，而活动实际存在。
+     *
+     * 故改为**忠实执行 + 忠实报告**：填 `planId` 直接领，业务码原样显示
+     * （`0` 成功 / `1003` 已领过 / `1005` 领完）。「有没有名额」由服务端裁决。
+     *
+     * ⚠ captcha 失败会原地重试一次（官方日志实证：一次点击里
+     * `send_preflight outcome=error` → 6 秒后 `outcome=success`，因为阿里云
+     * CDN 首轮抖动是常态）。这里是「按两次才领到」的服务端侧对策。
+     */
+    function ClaimSection(props) {
+      const { accounts, busy, onClaimed, captcha, autoClaim, onToggleAutoClaim } = props
+      /** accountId → { planId, loading, results, error } */
+      const [state, setState] = useState({})
+      const [open, setOpen] = useState(false)
+      const [restarting, setRestarting] = useState(false)
+      const [togglingAuto, setTogglingAuto] = useState(false)
+
+      const patch = (id, next) => setState((prev) => ({ ...prev, [id]: { ...prev[id], ...next } }))
+
+      /**
+       * 探测活动：调 /claimable（官方 marketing/touch 发现端点，GET、零 captcha）。
+       * **自动执行**（展开即探），结果存进 state 供渲染与领取使用。
+       */
+      const probe = useCallback(
+        async (id) => {
+          patch(id, { probing: true, error: undefined, results: undefined, emptyReason: undefined })
+          try {
+            /** /claimable 是 GET（id 走 query），不走 POST 版 api() 助手。 */
+            const response = await fetch(`${API}/claimable?id=${encodeURIComponent(id)}`)
+            const data = await response.json().catch(() => ({}))
+            if (!response.ok) throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`)
+            const plans = Array.isArray(data.plans) ? data.plans : []
+            /**
+             * 三态（0.11.0）：旧实现把「探测失败」与「确实没有活动」写成同一句话，
+             * 用户无法区分是服务端真没给，还是客户端拿挂了 —— 这正是
+             * 「明明有活动却显示没有」最难排查的那一种。
+             *
+             * - `ok === false` → 探测失败（上游不可达 / 异常），红字；
+             * - `sources.campaign === 0 && sources.records === 0` → 服务端确实没有投放，
+             *   也没有领取记录；
+             * - 其余空结果 → 未知（老版本宿主没带 sources）。
+             */
+            const emptyReason =
+              plans.length > 0
+                ? undefined
+                : data.ok === false
+                  ? 'failed'
+                  : data.sources?.campaign === 0 && data.sources?.records === 0
+                    ? 'none'
+                    : 'unknown'
+            patch(id, {
+              probing: false,
+              plans,
+              sources: data.sources,
+              emptyReason,
+              ...(plans.length === 0
+                ? {
+                    error:
+                      data.ok === false
+                        ? `探测失败：${data.error ?? '上游不可达'}`
+                        : emptyReason === 'none'
+                          ? '服务端此刻没有向你投放活动（投放源与领取记录均为空）'
+                          : '当前没有探测到可领取的活动',
+                  }
+                : {}),
+            })
+          } catch (caught) {
+            patch(id, {
+              probing: false,
+              plans: [],
+              emptyReason: 'failed',
+              error: caught instanceof Error ? caught.message : String(caught),
+            })
+          }
+        },
+        [],
+      )
+
+      const claim = useCallback(
+        async (id) => {
+          /** plan_id 只来自探测结果 —— 没有手输路径（见渲染处注释）。 */
+          const target = state[id]?.plans?.find((plan) => plan.claimed !== true) ?? state[id]?.plans?.[0]
+          if (typeof target?.planId !== 'string' || target.planId.length === 0) {
+            patch(id, { error: '当前没有探测到可领取的活动' })
+            return
+          }
+          patch(id, { loading: true, error: undefined, results: undefined })
+          try {
+            /** campaignId：领取成功后服务端要 confirm 回执（0.9.7），探测结果里带着。 */
+            const data = await api('/claim', {
+              id,
+              planId: target.planId,
+              ...(typeof target.campaignId === 'string' ? { campaignId: target.campaignId } : {}),
+            })
+            patch(id, { loading: false, results: Array.isArray(data.results) ? data.results : [] })
+            /**
+             * ⚠ 必须**重新探测**，不能只改本地快照。
+             *
+             * 旧实现只 `patch` 了 results 并刷新余额：`state[id].plans` 还是领之前
+             * 那份 `claimed:false`，于是按钮永远保持可点（用户报「领完不变灰」）。
+             *
+             * 服务端在领取成功后做两件事：撤投放（deliveries 变空）+ 写字
+             * `billing/balance` 的 plans[]。重新探测能同时反映两者：
+             * claimed 变 true、或整条从列表消失 —— 两种都让按钮失能。
+             */
+            await probe(id)
+            /** 领取会改变余额（或生成 pending），刷新面板让进度条同步。 */
+            if (typeof onClaimed === 'function') await onClaimed()
+          } catch (caught) {
+            patch(id, { loading: false, error: caught instanceof Error ? caught.message : String(caught) })
+            /** 失败也探一次：可能在飞请求里其实成功了（幂等 1003），别让 UI 停在旧态。 */
+            void probe(id)
+          }
+        },
+        [onClaimed, probe, state],
+      )
+
+      /**
+       * 展开时自动探测一次（探测零成本：GET、不烧 captcha）。
+       * ⚠ effect 依赖 `open` 与 `accounts`；已探测过的账号跳过，避免反复请求投放端点。
+       */
+      useEffect(() => {
+        if (open !== true) return
+        for (const account of accounts) {
+          if (state[account.id] !== undefined) continue
+          void probe(account.id)
+        }
+      }, [open, accounts, probe, state])
+
+      /** 自动领取开关（拨盘）：写入宿主 settings，重启后保持。 */
+      const toggleAutoClaim = useCallback(async () => {
+        if (typeof onToggleAutoClaim !== 'function') return
+        setTogglingAuto(true)
+        try {
+          await onToggleAutoClaim(autoClaim?.enabled !== true)
+        } finally {
+          setTogglingAuto(false)
+        }
+      }, [autoClaim, onToggleAutoClaim])
+
+      /**
+       * ⚠ 所有 hooks 必须在任何早退之前调用。
+       * 0.5.0 曾把 useCallback 放在 `return null` 之后 → 两次渲染 hook 数不一致
+       * → React 抛 Rendered fewer hooks than expected → 整个面板白屏。
+       *
+       * 0.6.6 起「重启」改为**取指引**：端点不再替用户执行（杀进程 + 计划任务
+       * 被火绒判毒，且宿主 Job Object 会连带杀死脚本），只返回用户可复制的
+       * 启动命令。这里拿到后展示出来，让用户自己完成重启。
+       *
+       * @param {'plain' | 'debug'} mode `debug` 才带 `--remote-debugging-port`。
+       */
+      const restart = useCallback(async (mode = 'debug') => {
+        setRestarting(true)
+        try {
+          const debugPort = mode === 'debug' ? captcha?.debugPort ?? 9229 : undefined
+          const data = await api('/restart-cdp', { ...(debugPort !== undefined ? { debugPort } : {}) })
+          /**
+           * ⚠ 按 mode 分槽存：普通重启指引和带端口指引**不能互相覆盖**。
+           * `__restart` 旧实现是单一槽位，点过「重启指引」再点「开调试端口重启」
+           * 会互相顶替，用户看到的那条命令与当前提示语境对不上。
+           */
+          const slot = mode === 'debug' ? '__restartDebug' : '__restartPlain'
+          setState((prev) => ({
+            ...prev,
+            [slot]: data?.command ?? '未拿到重启指引（请查看插件日志）',
+            [`${slot}Note`]: data?.note,
+          }))
+        } catch (caught) {
+          const slot = mode === 'debug' ? '__restartDebug' : '__restartPlain'
+          setState((prev) => ({
+            ...prev,
+            [slot]: `获取指引失败：${caught instanceof Error ? caught.message : String(caught)}`,
+          }))
+        } finally {
+          setRestarting(false)
+        }
+      }, [captcha])
+
+      if (!Array.isArray(accounts) || accounts.length === 0) return null
+
+      const captchaReachable = captcha !== undefined && captcha.reachable === true
+
+      /**
+       * 启动命令展示块：**只在这条提示旁边**出现。
+       *
+       * ⚠ 这些命令是「一份提示配一份上下文」，不能孤零零挂在组底部：
+       * 用户看到的是「连不上调试端口」这行字，要复制的东西就得在它旁边，
+       * 否则得来回滚动、还得自己判断该用哪一条。
+       */
+      const restartGuide = (slot) =>
+        state[slot] !== undefined
+          ? h(
+              'div',
+              { className: 'zsp-restart-guide' },
+              h('div', { className: 'zsp-muted' }, state[`${slot}Note`] ?? '请手动完成重启：'),
+              /** 命令用 code 块展示（user-select:all，点一下全选，方便复制）。 */
+              h('code', { className: 'zsp-plan-id' }, state[slot]),
+            )
+          : null
+
+      return h(
+        'div',
+        { className: 'zsp-group' },
+        h(
+          'div',
+          { className: 'zsp-row' },
+          h('span', { className: 'zsp-name' }, '赠送额度'),
+          h(
+            'span',
+            { className: 'zsp-muted' },
+            captchaReachable
+              ? '展开即自动探测活动（零 captcha），领取才需要 captcha'
+              : '展开即自动探测活动；日常调用模型不受影响，只有领取需要 captcha',
+          ),
+          h('span', { className: 'zsp-spacer' }),
+          /**
+           * ⚠ 两件事别混成一件：
+           * - **重载插件**：任何模式下重启都行，与 `--remote-debugging-port` 无关；
+           * - **开调试端口**：只为 captcha 载体。
+           *
+           * 0.6.6 起按钮只做「取指引」：点击后展示可复制的启动命令，由**用户**
+           * 自己退出并重开 —— 插件不再杀进程（杀进程 + 计划任务被火绒判毒，
+           * 且宿主 Job Object 会连带杀死执行脚本）。
+           */
+          captchaReachable
+            ? h(
+                'button',
+                {
+                  className: 'zsp-btn',
+                  onClick: () => void restart('plain'),
+                  disabled: busy || restarting,
+                  title: '生成普通重启指引（重载插件，不带调试端口）',
+                },
+                restarting ? '获取中…' : '重启指引',
+              )
+            : h(
+                'button',
+                {
+                  className: 'zsp-btn',
+                  onClick: () => void restart('debug'),
+                  disabled: busy || restarting,
+                  title:
+                    `${captcha?.reason ?? '需要宿主带调试端口启动才能产出 captcha'}。` +
+                    '点击获取可直接复制的启动命令（由你手动执行）。',
+                },
+                restarting ? '获取中…' : '开调试端口重启',
+              ),
+          h(
+            'button',
+            { className: 'zsp-btn', onClick: () => setOpen((prev) => !prev), disabled: busy },
+            open ? '收起' : '领取',
+          ),
+        ),
+        /**
+         * 载体不可用时，**提示句 + 启动命令紧贴在一起**（一句话 + 下面一行可复制命令）。
+         * 提示句本身不重复按钮 tooltip 那串长文案：它太长，塞进行内会把按钮挤走。
+         */
+        captchaReachable
+          ? null
+          : h(
+              'div',
+              { className: 'zsp-row', style: { alignItems: 'flex-start', flexDirection: 'column', gap: '2px' } },
+              h(
+                'span',
+                { className: 'zsp-muted', title: captcha?.reason ?? undefined },
+                `连不上宿主调试端口 127.0.0.1:${captcha?.debugPort ?? 9229}：` +
+                '先彻底退出 DSH 再带端口重开（日常对话不受影响）。',
+              ),
+              restartGuide('__restartDebug'),
+            ),
+        /**
+         * 自动领取拨盘：**说明在左、开关在右**（与其他行的「标签 … 控件」同构）。
+         * ⚠ 顺序不能反过来：右对齐是一列，开关放左边会与上面的按钮错位。
+         */
+        h(
+          'div',
+          { className: 'zsp-row', style: { alignItems: 'center' } },
+          h(
+            'span',
+            { className: 'zsp-muted', style: { flex: '1 1 auto', minWidth: 0 } },
+            autoClaim?.enabled === true
+              ? `自动领取已开启：定时探测，发现新活动自动领取${
+                  Number.isFinite(autoClaim?.seenCount) && autoClaim.seenCount > 0
+                    ? `（已记录 ${autoClaim.seenCount} 个，不会重复领）`
+                    : ''
+                }`
+              : '自动领取已关闭：探测仍然自动，领取需手动点',
+          ),
+          h(Toggle, {
+            checked: autoClaim?.enabled === true,
+            disabled: busy || togglingAuto,
+            onChange: () => void toggleAutoClaim(),
+            label: '自动领取',
+          }),
+        ),
+        /**
+         * 载体已就绪时，只有**用户主动点「重启指引」**才在拨盘下方出普通重启命令；
+         * 带端口那份永远贴着上面的提示行，两份互不顶替（按 mode 分槽）。
+         */
+        restartGuide('__restartPlain'),
+        open
+          ? accounts.map((account) => {
+              const slot = state[account.id] ?? {}
+              /**
+               * ⚠ 这里**没有 plan_id 输入框**：探测是自动的（展开即探），
+               * plan_id 只作为**只读**标识展示。手工粘贴活动 id 的路径已移除 ——
+               * 它只会让人填错、填过期的 id，然后白烧一次 captcha。
+               */
+              const plans = Array.isArray(slot.plans) ? slot.plans : []
+              /**
+               * ⚠ 服务端领取成功后不再投放该活动（deliveries 变空）⇒ 已领账号靠
+               * `billing/balance` 的领取记录补显（claimed: true）。一视同仁：
+               * 每个账号都显示全部已知活动，只是已领的没有领取按钮。
+               *
+               * ⚠ 刚领到的活动落在 `pending[]`（到期才进 `plans`），路由层已合并并带
+               * `pending: true` / `effectiveAt`。这里要把它显示成「已领取 · 待生效 + 时间」，
+               * 否则用户只会看到一行无名灰字，仍认为「没有活动」。
+               */
+              const claimable = plans.find((plan) => plan.claimed !== true)
+              const planId = claimable?.planId ?? plans[0]?.planId
+              const allClaimed = plans.length > 0 && claimable === undefined
+              const pendingPlan = plans.find((plan) => plan.pending === true)
+              const formatWhen = (ms) =>
+                typeof ms === 'number' && Number.isFinite(ms)
+                  ? new Date(ms).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : undefined
+              /** 三态文案：探测失败 / 已领（待生效）/ 确实没有活动 —— 三者不可混说。 */
+              const emptyHint =
+                slot.emptyReason === 'failed'
+                  ? slot.error
+                  : slot.emptyReason === 'none'
+                    ? '服务端此刻没有向你投放活动（投放源与领取记录均为空）'
+                    : '当前没有探测到可领取的活动'
+              return h(
+                'div',
+                { key: account.id, className: 'zsp-row', style: { alignItems: 'flex-start' } },
+                h('span', { className: 'zsp-muted', style: { minWidth: '96px' } }, `#${account.index} ${account.nickname}`),
+                h(
+                  'div',
+                  { className: 'zsp-meter', style: { flex: '1 1 auto' } },
+                  h('code', { className: 'zsp-plan-id' }, planId ?? '—'),
+                  typeof plans[0]?.name === 'string' && plans[0].name.length > 0
+                    ? h('span', { className: 'zsp-muted' }, plans[0].name)
+                    : null,
+                  typeof plans[0]?.grantUnits === 'number'
+                    ? h('span', { className: 'zsp-muted' }, `+${plans[0].grantUnits.toLocaleString()} ${plans[0].unitType ?? ''}`.trim())
+                    : null,
+                  slot.probing === true
+                    ? h('span', { className: 'zsp-muted' }, '探测中…')
+                    : plans.length > 1
+                      ? h('span', { className: 'zsp-muted' }, `等 ${plans.length} 个活动`)
+                      : null,
+                  allClaimed && slot.loading !== true
+                    ? h(
+                        'span',
+                        { className: 'zsp-muted' },
+                        pendingPlan === undefined
+                          ? '已领取'
+                          : `已领取 · 待生效${formatWhen(pendingPlan.effectiveAt) === undefined ? '' : ` ${formatWhen(pendingPlan.effectiveAt)}`}${formatWhen(pendingPlan.expiresAt) === undefined ? '' : ` · ${formatWhen(pendingPlan.expiresAt)} 过期`}`,
+                      )
+                    : null,
+                  slot.loading === true
+                    ? h('span', { className: 'zsp-muted' }, '领取中…（captcha 失败会自动重试一次）')
+                    : slot.error !== undefined
+                      ? h('span', { className: slot.emptyReason === 'failed' ? 'zsp-error' : 'zsp-muted' }, slot.error)
+                      : slot.results !== undefined
+                        ? h(
+                            'span',
+                            { className: 'zsp-muted' },
+                            slot.results
+                              .map((item) => {
+                                /** 忠实回传服务端裁决，不做含糊翻译。 */
+                                if (item.ok === true) {
+                                  return `✓ 领取成功${item.alreadyClaimed === true ? '（此前已领过，幂等）' : ''}`
+                                }
+                                /**
+                                 * 风控（3012 → `RISK_BLOCKED`）单独一句（1.0.2）。
+                                 *
+                                 * 这不是普通的「失败了」：宿主在抛出 RISK_BLOCKED 前
+                                 * **已自动清掉**该账号该模型的限流标记（pool.clearModelRateLimits，
+                                 * 见 plan-client 的 risk 分支）—— 也就是说用户此刻就能重试。
+                                 * 把「已自动清除…可立即重试」说出来，否则用户看到红字只会
+                                 * 以为账号坏了、去换号或反复点；而 3012 的冷却惩罚是账号级的
+                                 * （30 分钟 → 24 小时 → 停用），反复重试正是最坏的动作。
+                                 */
+                                if (item.code === 'RISK_BLOCKED') {
+                                  return '⚠ 上游风控拦截（3012，非额度问题）：已自动清除本账号限流标记，可立即重试'
+                                }
+                                const code = item.code !== undefined ? `code ${item.code}` : `HTTP ${item.httpStatus}`
+                                return `✗ ${code}：${item.message ?? item.error ?? '未知原因'}`
+                              })
+                              .join('；'),
+                          )
+                        : null,
+                ),
+                h(
+                  'div',
+                  { className: 'zsp-actions', style: { marginTop: 0 } },
+                  h(
+                    'button',
+                    {
+                      className: 'zsp-btn',
+                      onClick: () => void claim(account.id),
+                      disabled: busy || slot.loading === true || slot.probing === true || claimable === undefined,
+                      title: claimable === undefined
+                        ? (allClaimed
+                            ? (pendingPlan === undefined ? '该账号已领取全部已知活动' : '该账号已领取该活动，正在待生效期（到点会计入额度）')
+                            : emptyHint)
+                        : `领取 ${claimable.planId}`,
+                    },
+                    slot.loading === true ? '领取中…' : allClaimed ? (pendingPlan === undefined ? '已领取' : '已领取 · 待生效') : '领取',
+                  ),
+                ),
+              )
+            })
+          : null,
+      )
+    }
+
+    /**
+     * 池子**总额度**行（0.9.3 置顶，0.10.0 纳入未生效额度）：把各账号已加载的
+     * 余额桶求和，按「到期时间分层」显示 —— 快过期的一组、日重置的一组。
+     *
+     * 为什么未生效的（`pending`，已领没到点）也要算进总额度：用户问的是
+     * 「池子一共有多少 token」，不是「此刻能立刻花多少」。漏掉 pending 时，
+     * 领取成功的 3 亿包在到点前完全不计入，总额度看起来像没领到。
+     * 但两者语义不同（一个现在就能用，一个要等到点），所以：
+     * - 分母 = 已生效 total + 未生效 grantUnits，分子只算**现在可用**的剩余；
+     * - 未生效部分按**生效日**单独分层（带条纹），不提前并进现有分层 ——
+     *   否则「3 亿 / 3 亿」出现在一个今天到期的层里，读起来像马上就能花。
+     */
+    function TotalQuota(props) {
+      const { accounts, balances } = props
+      if (!Array.isArray(accounts) || accounts.length === 0) return null
+      const entries = accounts
+        .map((account) => balances?.[account.id])
+        .filter((balance) => balance?.ok === true && balance.enterprise !== true)
+      if (entries.length === 0) return null
+      /** 按到期日分层：同一天到期的桶合并成一组（日重置桶全部落在 23:59）。 */
+      const byDay = new Map()
+      /** 未生效额度按生效日分层（`expiresAt` 还是整份 plan 的作废时间）。 */
+      const pendingByDay = new Map()
+      let loaded = 0
+      let pendingUnits = 0
+      for (const balance of entries) {
+        const buckets = Array.isArray(balance.buckets) && balance.buckets.length > 0
+          ? balance.buckets
+          : [{ remaining: balance.remaining, total: balance.total, expiresAt: balance.expiresAt }]
+        for (const bucket of buckets) {
+          const remaining = typeof bucket.remaining === 'number' ? bucket.remaining : 0
+          const total = typeof bucket.total === 'number' ? bucket.total : 0
+          if (total <= 0) continue
+          loaded += 1
+          const day = typeof bucket.expiresAt === 'number' && bucket.expiresAt > 0
+            ? new Date(bucket.expiresAt).toISOString().slice(0, 10)
+            : '—'
+          const entry = byDay.get(day) ?? { remaining: 0, total: 0, expiresAt: undefined }
+          entry.remaining += remaining
+          entry.total += total
+          if (typeof bucket.expiresAt === 'number' && bucket.expiresAt > 0) {
+            entry.expiresAt = entry.expiresAt === undefined ? bucket.expiresAt : Math.min(entry.expiresAt, bucket.expiresAt)
+          }
+          byDay.set(day, entry)
+        }
+        for (const item of Array.isArray(balance.pending) ? balance.pending : []) {
+          const units = Number(item?.grantUnits)
+          if (!Number.isFinite(units) || units <= 0) continue
+          pendingUnits += units
+          const effectiveAt = typeof item.effectiveAt === 'number' && item.effectiveAt > 0 ? item.effectiveAt : undefined
+          const key = effectiveAt === undefined ? '—' : new Date(effectiveAt).toISOString().slice(0, 10)
+          const entry = pendingByDay.get(key) ?? { units: 0, effectiveAt: undefined, expiresAt: undefined }
+          entry.units += units
+          if (effectiveAt !== undefined) {
+            entry.effectiveAt = entry.effectiveAt === undefined ? effectiveAt : Math.min(entry.effectiveAt, effectiveAt)
+          }
+          if (typeof item.expiresAt === 'number' && item.expiresAt > 0) {
+            entry.expiresAt = entry.expiresAt === undefined ? item.expiresAt : Math.min(entry.expiresAt, item.expiresAt)
+          }
+          pendingByDay.set(key, entry)
+        }
+      }
+      if (loaded === 0 && pendingUnits <= 0) return null
+      const groups = [...byDay.entries()].sort((a, b) => (a[1].expiresAt ?? Infinity) - (b[1].expiresAt ?? Infinity))
+      const pendingGroups = [...pendingByDay.entries()]
+        .sort((a, b) => (a[1].effectiveAt ?? Infinity) - (b[1].effectiveAt ?? Infinity))
+      /** 分子只有已经能花的；分母含待生效 —— 否则「待生效」那几行等于没进总额度。 */
+      const totalRemaining = groups.reduce((sum, [, g]) => sum + g.remaining, 0)
+      const activeAll = groups.reduce((sum, [, g]) => sum + g.total, 0)
+      const totalAll = activeAll + pendingUnits
+      const pendingLabel = pendingUnits > 0 ? ` · 其中待生效 ${formatTokens(pendingUnits)}` : ''
+      return h(
+        'div',
+        { className: 'zsp-group zsp-total' },
+        h(
+          'div',
+          { className: 'zsp-row' },
+          h('span', { className: 'zsp-name' }, '总额度'),
+          h(
+            'span',
+            { className: 'zsp-muted' },
+            `${formatTokens(totalRemaining)} / ${formatTokens(totalAll)} tokens${pendingLabel} · ${entries.length}/${accounts.length} 个账号已加载`,
+          ),
+        ),
+        groups.map(([day, group]) =>
+          h(
+            'div',
+            { key: day, className: 'zsp-row', style: { paddingLeft: '18px' } },
+            h('span', { className: 'zsp-muted', style: { minWidth: '150px' } },
+              `${day === '—' ? '无到期' : formatEffective(group.expiresAt)} 到期`),
+            h(
+              'div',
+              { className: 'zsp-meter', style: { flex: '1 1 auto' } },
+              h('div', { className: 'zsp-bar' },
+                h('span', { style: { width: `${group.total > 0 ? Math.max(0, Math.min(100, Math.round((group.remaining / group.total) * 100))) : 0}%` } })),
+              h('span', { className: 'zsp-muted zsp-meter-caption' },
+                `${formatTokens(group.remaining)} / ${formatTokens(group.total)}`),
+            ),
+          ),
+        ),
+        /**
+         * 未生效额度单独分层：条纹 + 生效时间。与上方实色分层并排的用意是
+         * 「总额度里有多少还没到点」一眼可见 —— 合并进同一层会误导成现在可花。
+         */
+        pendingGroups.map(([key, group]) =>
+          h(
+            'div',
+            { key: `pending-${key}`, className: 'zsp-row', style: { paddingLeft: '18px' } },
+            h('span', { className: 'zsp-muted', style: { minWidth: '150px' } },
+              `${group.effectiveAt === undefined ? '待生效' : `${formatEffective(group.effectiveAt)} 起可用`}`),
+            h(
+              'div',
+              { className: 'zsp-meter', style: { flex: '1 1 auto' } },
+              h('div', { className: 'zsp-bar', 'data-pending': true },
+                h('span', { style: { width: '100%' } })),
+              h('span', { className: 'zsp-muted zsp-meter-caption' },
+                `${formatTokens(group.units)} tokens 待生效${group.expiresAt === undefined ? '' : ` · ${formatEffective(group.expiresAt)} 到期`}`),
+            ),
+          ),
+        ),
+      )
+    }
+
+    /**
+     * 单个账号卡片：状态点、可编辑昵称、渠道、限流 chips、余额条、操作按钮。
+     * 按钮只有两个：「使用」（置顶，下次请求即用它）与「删除」。
+     */
+    function AccountCard(props) {
+      const { account, balance, busy, modelListVisible, onToggleModelList, confirmId, setConfirmId, onRemove, onRename, onResetLimit } = props
+      /** Host 下发的是 `modelRateLimits` 对象（model → resetAt），摊平成 chips。 */
+      const limited = Object.entries(account.modelRateLimits ?? {})
+        .map(([model, resetAt]) => ({ model, resetAt }))
+        .filter((item) => Number(item.resetAt) > Date.now())
+      /**
+       * 风控痕迹（1.0.2）：`/summary` 的账号视图带 `riskBlocked`（来源 `last_error`
+       * 里是否出现过 3012 / unusual activity，见 manage-routes 的 riskBlockedOf）。
+       *
+       * 为什么值得一条 chip：3012 的惩罚是**账号级冷却**（30 分钟 → 24 小时 →
+       * 停用），而用户从界面上看不出任何区别 —— 他会一直点领取/重试，正是最坏的
+       * 动作。chip 兼作「清除限流」入口：它本身是按钮，点一下清掉本账号全部标记
+       * （含 `last_error`），账号立刻恢复可用。
+       *
+       * 注意与上面 `limited` 并存是**正常**的：风控与额度耗尽可以同时发生。
+       */
+      const riskBlocked = account.riskBlocked === true
+      return h(
+        'div',
+        { className: 'zsp-card', 'data-hidden': modelListVisible === false },
+        h(
+          'div',
+          { className: 'zsp-row' },
+          h('span', { className: 'zsp-dot', 'data-on': account.enabled === true }),
+          h(NicknameEdit, {
+            nickname: account.nickname,
+            busy,
+            onCommit: (next) => onRename(next),
+          }),
+          h(
+            'span',
+            { className: 'zsp-muted' },
+            `#${account.index} · ${channelLabel(account.channel)}`,
+          ),
+          limited.map((item) =>
+            h(
+              'span',
+              {
+                key: item.model,
+                className: 'zsp-chip',
+                'data-limited': 'true',
+                title: '该账号在此模型上被上游判为额度用尽（1005/零内容），到达限时间自动解除；若模型实际可用，点 × 立即清除误判',
+              },
+              `${item.model} 限额至 ${formatReset(item.resetAt)}`,
+              /** 清除误判（1.0.1）：「零内容两次升级」可能仍冤枉实际可用的模型，
+               * chip 上的 × 是唯一不依赖 CLI 的自救入口。 */
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'zsp-chip-x',
+                  'aria-label': `清除 ${item.model} 的限流标记`,
+                  disabled: busy,
+                  onClick: () => onResetLimit?.(item.model),
+                },
+                '×',
+              ),
+            ),
+          ),
+          /**
+           * 风控 chip（1.0.2）：**在模型栏这一行**（与限流 chip 同排），点它 = 清掉
+           * 本账号全部限流标记 + `last_error`，账号立刻可重试。
+           *
+           * 文案写「曾触发上游风控」而不是「被风控封禁」：3012 也可能是误判
+           * （用户实测拿到 3012 后同一请求重试即成功），把它说成封禁会让人白白换号。
+           */
+          riskBlocked
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  key: '__risk',
+                  className: 'zsp-chip',
+                  'data-risk': 'true',
+                  disabled: busy,
+                  title: '该账号曾触发上游风控（3012 unusual activity），可点清除限流恢复（清掉本账号全部限流标记与错误文案；风控不是额度问题）',
+                  onClick: () => onResetLimit?.(undefined),
+                },
+                '⚠ 曾触发风控 · 点清除限流恢复',
+              )
+            : null,
+          /** 每栏最右侧的开关：负 margin 拉出卡片缩进，与统一行的开关同列。 */
+          h(Toggle, {
+            checked: modelListVisible === true,
+            disabled: busy,
+            onChange: (next) => onToggleModelList(next),
+          }),
+        ),
+        balance === undefined
+          ? null
+          : balance.ok === true
+            ? balance.enterprise === true
+              ? h('span', { className: 'zsp-muted' }, '企业版：服务端不下发用量数字')
+              : h(
+                  React.Fragment,
+                  null,
+                  /**
+                   * 额度桶**逐个**画条（0.6.8）：不同桶到期时间不同，
+                   * 汇总条只会显示最早的那个，其余被吞掉。
+                   * 单桶时与旧视图一致；多桶时每桶一条 + 自己的到期时间。
+                   * （buckets 缺失 = 旧宿主 → 回退汇总条。）
+                   */
+                  Array.isArray(balance.buckets) && balance.buckets.length > 1
+                    ? balance.buckets.map((bucket, index) =>
+                        h(QuotaMeter, {
+                          key: `${bucket.planId ?? 'bucket'}-${index}`,
+                          remaining: bucket.remaining,
+                          total: bucket.total,
+                          planName: bucket.showName ?? `额度桶 ${index + 1}`,
+                          expiresAt: bucket.expiresAt,
+                        }),
+                      )
+                    : h(QuotaMeter, {
+                        remaining: balance.remaining,
+                        total: balance.total,
+                        planName: balance.planName,
+                        expiresAt: balance.expiresAt,
+                      }),
+                  (balance.pending ?? []).map((item, index) =>
+                    h(
+                      React.Fragment,
+                      { key: `${item.planId ?? 'plan'}-${index}` },
+                      h(QuotaMeter, {
+                        pending: true,
+                        effectiveAt: item.effectiveAt,
+                        expiresAt: item.expiresAt,
+                        planName: item.showName,
+                      }),
+                      h(
+                        'span',
+                        { className: 'zsp-muted', style: { fontSize: '11px' } },
+                        `${item.showName ?? '额度'} ${formatPendingUnits(item)} tokens`,
+                      ),
+                    ),
+                  ),
+                )
+            : h('span', { className: 'zsp-error' }, balance.error ?? '余额查询失败'),
+        h(
+          'div',
+          { className: 'zsp-actions' },
+          /**
+           * ⚠ 0.7.0 移除「使用」按钮：统一选号默认按**到期时间**取号
+           * （快过期先用，config.selectionOrder），手动置顶不再决定顺序 ——
+           * 按钮也就失去了意义（0.6.9 的「点了没作用」反馈即源于此）。
+           * 钉定栏位固定吃指定账号，本就不需要置顶。
+           */
+          confirmId === account.id
+            ? h(
+                'button',
+                {
+                  className: 'zsp-btn',
+                  'data-danger': 'true',
+                  disabled: busy,
+                  onClick: () => {
+                    setConfirmId(undefined)
+                    onRemove()
+                  },
+                },
+                '确认删除？',
+              )
+            : h(
+                'button',
+                {
+                  className: 'zsp-btn',
+                  'data-danger': 'true',
+                  disabled: busy,
+                  onClick: () => {
+                    setConfirmId(account.id)
+                    setTimeout(
+                      () => setConfirmId((current) => (current === account.id ? undefined : current)),
+                      CONFIRM_RESET_MS,
+                    )
+                  },
+                },
+                '删除',
+              ),
+        ),
+      )
+    }
+
+    /**
+     * 渠道选项（登录渠道与 lib/upstream-api.js 的 LOGIN_CHANNELS 对齐）。
+     */
+    const CHANNEL_OPTIONS = [
+      { value: 'bigmodel', label: 'bigmodel', desc: '智谱开放平台 · bigmodel.cn', badge: '智' },
+      { value: 'zai', label: 'zai', desc: 'Z.AI · z.ai', badge: 'Z' },
+    ]
+
+    /**
+     * 现代化下拉（零依赖手写）：渠道徽标 + 两行选项 + hover 高亮 +
+     * 点击外部关闭；不做键盘导航（用不到，从简）。
+     */
+    function ChannelSelect(props) {
+      const { value, onChange, disabled } = props
+      const [open, setOpen] = useState(false)
+      const rootRef = useRef(undefined)
+
+      const selected = CHANNEL_OPTIONS.find((item) => item.value === value) ?? CHANNEL_OPTIONS[0]
+
+      useEffect(() => {
+        if (open !== true) return undefined
+        const onPointerDown = (event) => {
+          if (rootRef.current !== undefined && !rootRef.current.contains(event.target)) setOpen(false)
+        }
+        document.addEventListener('pointerdown', onPointerDown, true)
+        return () => document.removeEventListener('pointerdown', onPointerDown, true)
+      }, [open])
+
+      const commit = useCallback(
+        (nextValue) => {
+          if (!CHANNEL_OPTIONS.some((item) => item.value === nextValue)) return
+          onChange(nextValue)
+          setOpen(false)
+        },
+        [onChange],
+      )
+
+      const onKeyDown = useCallback(
+        (event) => {
+          /** 键盘只保留 Esc 关闭（一般用不到键盘选渠道，从简）。 */
+          if (event.key === 'Escape') setOpen(false)
+          else if (event.key === 'Tab') setOpen(false)
+        },
+        [],
+      )
+
+      return h(
+        'div',
+        { className: 'zsp-select', ref: rootRef, onKeyDown },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'zsp-select-trigger',
+            'aria-haspopup': 'listbox',
+            'aria-expanded': open === true,
+            disabled,
+            onClick: () => setOpen((current) => !current),
+          },
+          h('span', { className: 'zsp-badge' }, selected.badge),
+          h('span', { className: 'zsp-select-label' }, selected.label),
+          h('span', { className: 'zsp-select-desc' }, selected.desc),
+          h('span', { className: 'zsp-caret', 'aria-hidden': 'true' }),
+        ),
+        open === true
+          ? h(
+              'div',
+              { className: 'zsp-select-menu', role: 'listbox', 'aria-label': '登录渠道' },
+              CHANNEL_OPTIONS.map((option) =>
+                h(
+                  'button',
+                  {
+                    key: option.value,
+                    type: 'button',
+                    role: 'option',
+                    className: 'zsp-option',
+                    'aria-selected': option.value === value,
+                    onClick: () => commit(option.value),
+                  },
+                  h('span', { className: 'zsp-badge' }, option.badge),
+                  h(
+                    'span',
+                    { className: 'zsp-option-text' },
+                    h('span', null, option.label),
+                    h('span', { className: 'zsp-select-desc' }, option.desc),
+                  ),
+                  h('span', { className: 'zsp-option-check', 'aria-hidden': 'true' }, '✓'),
+                ),
+              ),
+            )
+          : null,
+      )
+    }
+
+    /**
+     * 「添加账号」区块：渠道选择 → 发起授权 → 展示授权链接 → 轮询直到 ready。
+     *
+     * 两段式设备授权与 CLI 相同：Host 持 flowSecret，Client 只拿 authorizeUrl
+     * 和 flowId，凭据永远不经过页面。
+     */
+    function AddAccountSection(props) {
+      const { busy, onAdded } = props
+      const [channel, setChannel] = useState('bigmodel')
+      const [phase, setPhase] = useState('idle') // idle | starting | waiting | ready | failed
+      const [flow, setFlow] = useState(undefined) // { flowId, authorizeUrl, pollIntervalMs }
+      const [message, setMessage] = useState(undefined)
+      const [copied, setCopied] = useState(false)
+      const timerRef = useRef(undefined)
+
+      useEffect(() => {
+        /** 组件卸载/流程结束时停掉轮询定时器。 */
+        return () => {
+          if (timerRef.current !== undefined) clearTimeout(timerRef.current)
+        }
+      }, [])
+
+      const stopPolling = useCallback(() => {
+        if (timerRef.current !== undefined) {
+          clearTimeout(timerRef.current)
+          timerRef.current = undefined
+        }
+      }, [])
+
+      const poll = useCallback(
+        (flowId, intervalMs) => {
+          timerRef.current = setTimeout(async () => {
+            try {
+              const outcome = await api('/login/poll', { flowId })
+              if (outcome.status === 'pending') {
+                poll(flowId, intervalMs)
+                return
+              }
+              if (outcome.status === 'ready') {
+                setPhase('ready')
+                setMessage(
+                  `${outcome.created === false ? '已更新' : '已添加'}账号「${outcome.account?.nickname ?? ''}」`,
+                )
+                stopPolling()
+                if (typeof onAdded === 'function') onAdded()
+                return
+              }
+              setPhase('failed')
+              setMessage(outcome.error ?? '授权失败')
+            } catch (caught) {
+              setPhase('failed')
+              setMessage(caught instanceof Error ? caught.message : String(caught))
+            }
+          }, intervalMs)
+        },
+        [onAdded, stopPolling],
+      )
+
+      const start = useCallback(async () => {
+        stopPolling()
+        setPhase('starting')
+        setMessage(undefined)
+        setCopied(false)
+        try {
+          const started = await api('/login/start', { channel })
+          setFlow({ flowId: started.flowId, authorizeUrl: started.authorizeUrl, pollIntervalMs: started.pollIntervalMs ?? 2000 })
+          setPhase('waiting')
+          setMessage(undefined)
+          poll(started.flowId, Math.max(1500, started.pollIntervalMs ?? 2000))
+        } catch (caught) {
+          setPhase('failed')
+          setMessage(caught instanceof Error ? caught.message : String(caught))
+        }
+      }, [channel, poll, stopPolling])
+
+      const cancel = useCallback(() => {
+        stopPolling()
+        setPhase('idle')
+        setFlow(undefined)
+        setMessage(undefined)
+      }, [stopPolling])
+
+      const copyLink = useCallback(async () => {
+        if (flow?.authorizeUrl === undefined) return
+        try {
+          await navigator.clipboard.writeText(flow.authorizeUrl)
+          setCopied(true)
+        } catch {
+          setCopied(false)
+        }
+      }, [flow])
+
+      return h(
+        'div',
+        { className: 'zsp-add' },
+        h(
+          'div',
+          { className: 'zsp-row' },
+          h('span', { className: 'zsp-name' }, '添加账号'),
+          h(ChannelSelect, {
+            value: channel,
+            onChange: setChannel,
+            disabled: busy || phase === 'starting' || phase === 'waiting',
+          }),
+          phase === 'waiting' || phase === 'starting'
+            ? h('button', { className: 'zsp-btn', onClick: cancel }, '取消')
+            : h(
+                'button',
+                { className: 'zsp-btn', onClick: () => void start(), disabled: busy },
+                phase === 'starting' ? '申请中…' : '发起登录',
+              ),
+        ),
+        phase === 'starting' ? h('span', { className: 'zsp-muted' }, '正在向 ZCode 申请设备授权…') : null,
+        phase === 'waiting' && flow !== undefined
+          ? h(
+              React.Fragment,
+              null,
+              h(
+                'span',
+                { className: 'zsp-muted' },
+                '① 在浏览器打开授权链接并用对应站点的账号登录授权（链接 10 分钟内有效）：',
+              ),
+              h('a', { className: 'zsp-link', href: flow.authorizeUrl, target: '_blank', rel: 'noreferrer' }, flow.authorizeUrl),
+              h(
+                'div',
+                { className: 'zsp-row' },
+                h('button', { className: 'zsp-btn', onClick: () => void copyLink() }, copied ? '已复制' : '复制链接'),
+                h('span', { className: 'zsp-muted' }, '② 授权完成后本面板会自动入池（无需其它操作）。'),
+              ),
+            )
+          : null,
+        phase === 'ready' ? h('p', { className: 'zsp-ok' }, message) : null,
+        phase === 'failed' ? h('p', { className: 'zsp-error' }, message ?? '授权失败') : null,
+      )
+    }
+    /**
+     * 面板主体。
+     *
+     * 宿主以两种 view 调用（workbuddy 实证）：
+     * - `view === 'summary'`：插件列表页的一行简介，返回纯文本；
+     * - 其余：详情页完整面板。
+     *
+     * ⚠ Hooks 全部先于 summary 早退调用（React hooks 顺序约束）。
+     */
+    function Panel(props) {
+      const [data, setData] = useState(undefined)
+      const [error, setError] = useState(undefined)
+      /** 一次性成功提示（清除限流之类「做完要说一声」的操作，1.0.2）。 */
+      const [notice, setNotice] = useState(undefined)
+      const [balances, setBalances] = useState({})
+      const [busy, setBusy] = useState(false)
+      const [confirmId, setConfirmId] = useState(undefined)
+      const [distKeys, setDistKeys] = useState(undefined)
+
+      /**
+       * 统一刷新：summary **立即返回**账号列表（0.6.7 起不在 summary 里拉余额），
+       * 对 `balance: null` 的账号逐个补拉 `/balance?id=` 懒加载 ——
+       * 列表秒出，单账号余额慢/失败只影响自己那张卡，不再把整个面板挡在「加载中…」。
+       */
+      const load = useCallback(async () => {
+        try {
+          const summary = await api('/summary')
+          setData(summary)
+          /** 分发 key 列表（脱敏形态）单独拉（summary 不带它，见 manage-routes 注释）。 */
+          void fetch(`${API}/distribution-keys`).then(async (r) => {
+            const data = await r.json().catch(() => ({}))
+            if (r.ok) setDistKeys(Array.isArray(data.keys) ? data.keys : [])
+          }).catch(() => {})
+          setError(undefined)
+          const accounts = Array.isArray(summary?.accounts) ? summary.accounts : []
+          const seeded = {}
+          for (const item of accounts) {
+            if (item.balance !== null && item.balance !== undefined) {
+              seeded[item.id] = { ok: true, ...item.balance }
+            } else {
+              seeded[item.id] = { ok: false, error: '余额加载中…' }
+            }
+          }
+          setBalances(seeded)
+          /** 并行补拉（每账号独立 fetch，单账号失败/超时不拖累其他）。 */
+          for (const item of accounts) {
+            if (item.balance !== null && item.balance !== undefined) continue
+            /** /balance 是 GET（id 走 query），不走 POST 版 api() 助手。 */
+            void fetch(`${API}/balance?id=${encodeURIComponent(item.id)}`)
+              .then(async (response) => {
+                const data = await response.json().catch(() => ({}))
+                if (!response.ok) throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`)
+                setBalances((prev) => ({
+                  ...prev,
+                  [item.id]: data?.balance !== null && data?.balance !== undefined
+                    ? { ok: true, ...data.balance }
+                    : { ok: false, error: '余额不可用' },
+                }))
+              })
+              .catch((caught) => {
+                setBalances((prev) => ({
+                  ...prev,
+                  [item.id]: { ok: false, error: caught instanceof Error ? caught.message : String(caught) },
+                }))
+              })
+          }
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught))
+        }
+      }, [])
+
+      useEffect(() => {
+        void load()
+      }, [load])
+
+      const act = useCallback(
+        async (path, body) => {
+          setBusy(true)
+          try {
+            await api(path, body)
+            await load()
+            setError(undefined)
+          } catch (caught) {
+            setError(caught instanceof Error ? caught.message : String(caught))
+          } finally {
+            setBusy(false)
+          }
+        },
+        [load],
+      )
+
+      /**
+       * 清除限流（1.0.2）：**不走 `act()`**。
+       *
+       * `act()` 成功时什么都不说，而用户点 × / 点风控 chip 时最想知道的是
+       * 「到底清掉了什么」。`/reset-limits` 现在回
+       * `{ removed, clearedModels, lastErrorBefore }`，这里把它摊成一句话放进
+       * 顶部提示位（`notice`），并保留几秒后自动消失 —— 不占长期版面。
+       *
+       * `model` 省略 = 清该账号全部标记（风控 chip 用这个形态）。
+       */
+      const resetLimit = useCallback(
+        async (account, model) => {
+          setBusy(true)
+          try {
+            const data = await api('/reset-limits', {
+              id: account.id,
+              ...(typeof model === 'string' && model.length > 0 ? { model } : {}),
+            })
+            await load()
+            setError(undefined)
+            setNotice(`${account.nickname}：${describeResetLimits(data, model)}`)
+          } catch (caught) {
+            setError(caught instanceof Error ? caught.message : String(caught))
+          } finally {
+            setBusy(false)
+          }
+        },
+        [load],
+      )
+
+      /** 提示自动消失（成功提示不该永久留在面板上）。 */
+      useEffect(() => {
+        if (notice === undefined) return undefined
+        const handle = setTimeout(() => setNotice(undefined), 6000)
+        return () => clearTimeout(handle)
+      }, [notice])
+
+      /** 插件列表页的摘要视图：一行文本，不发起请求。 */
+      if ((props || {}).view === 'summary') {
+        return '管理 ZCode 赠送免费 plan 的账号池：每账号一个模型栏位（各吃各的额度）、统一选号开关、余额与限流、面板内登录添加账号（bigmodel / z.ai）。'
+      }
+
+      const accounts = data !== undefined && Array.isArray(data.accounts) ? data.accounts : undefined
+      /** 统一选号栏位当前是否显示（关掉 = 模型列表只留每账号一栏）。 */
+      const unifiedVisible = data?.unifiedModelList !== false
+
+      return h(
+        'section',
+        { className: 'zsp-panel' },
+        h('style', null, CSS),
+        h(
+          'div',
+          { className: 'zsp-head' },
+          h('h3', { className: 'zsp-title' }, '账号池管理'),
+          data !== undefined
+            ? h(
+                'span',
+                { className: 'zsp-muted' },
+                `${[data.displayName ?? data.provider, `${accounts.length} 个账号`].filter(Boolean).join(' · ')}`,
+              )
+            : null,
+          h('span', { className: 'zsp-spacer' }),
+          h('button', { className: 'zsp-btn', onClick: () => void load(), disabled: busy }, '刷新'),
+        ),
+        /**
+         * 池子总额度（0.9.3）：汇总所有账号的余额桶，置顶一行。
+         * 数据来自懒加载的 balances —— 未加载完的账号不计入（下方注明）。
+         */
+        h(TotalQuota, { accounts, balances }),
+        error !== undefined ? h('p', { className: 'zsp-error' }, error) : null,
+        /** 成功提示（清除限流）：与红色错误分开配色，几秒后自动消失。 */
+        notice !== undefined ? h('p', { className: 'zsp-muted', 'data-notice': 'true' }, `✓ ${notice}`) : null,
+        data === undefined && error === undefined ? h('span', { className: 'zsp-muted' }, '加载中…') : null,
+        h(AddAccountSection, { busy, onAdded: () => void load() }),
+        accounts !== undefined && accounts.length === 0
+          ? h('span', { className: 'zsp-muted' }, '账号池为空：用上方「添加账号」登录，或在插件目录运行 node bin/cli.mjs login。')
+          : null,
+        /**
+         * 账号区方块：最顶一行是「统一选号」+ 贴方块右上角的开关，
+         * 下面是各账号卡片 —— 面板顺序 = 模型选择器顺序。
+         */
+        h(
+          'div',
+          { className: 'zsp-group' },
+          h(
+            'div',
+            { className: 'zsp-row zsp-unified' },
+            h('span', { className: 'zsp-dot', 'data-on': unifiedVisible === true }),
+            h('span', { className: 'zsp-name' }, '统一选号'),
+            h(
+              'span',
+              { className: 'zsp-toggle-row' },
+              h(Toggle, {
+                checked: unifiedVisible === true,
+                disabled: busy,
+                onChange: (visible) => void act('/unified-list', { visible }),
+              }),
+            ),
+          ),
+          accounts !== undefined
+            ? accounts.map((account) =>
+                h(AccountCard, {
+                  key: account.id,
+                  account,
+                  balance: balances[account.id],
+                  busy,
+                  modelListVisible: account.modelListVisible !== false,
+                  onToggleModelList: (visible) => void act('/model-list-visible', { id: account.id, visible }),
+                  confirmId,
+                  setConfirmId,
+                  onRemove: () => void act('/remove', { id: account.id }),
+                  onRename: (nickname) => void act('/rename', { id: account.id, nickname }),
+                  /**
+                   * `model` 省略 = 清该账号全部标记（风控 chip 走这个形态）：
+                   * 3012 的痕迹在 `last_error` 里、不在 `modelRateLimits` 表里，
+                   * 全清才能让「点清除限流恢复」真的恢复。具体清了哪几条由后端
+                   * 回在 `clearedModels` 里，这里交给 `resetLimit` 转成提示。
+                   */
+                  onResetLimit: (model) => void resetLimit(account, model),
+                }),
+              )
+            : null,
+        ),
+        h(OpenAiGatewaySection, { gateway: data?.openAiGateway, busy, onChanged: () => void load() }),
+        h(DistributionKeysSection, { keys: distKeys, accounts, busy, onChanged: () => void load() }),
+        h(ClaimSection, {
+          accounts,
+          busy,
+          onClaimed: () => load(),
+          captcha: data?.captcha,
+          autoClaim: data?.autoClaim,
+          /**
+           * 自动领取拨盘：写入宿主（持久化 settings.json）后重新拉 summary，
+           * 让拨盘状态与服务端观测（seenCount）保持同源。
+           */
+          onToggleAutoClaim: async (enabled) => {
+            try {
+              await api('/auto-claim', { enabled })
+            } finally {
+              await load()
+            }
+          },
+        }),
+        data !== undefined && data.storeInMemory === true
+          ? h(
+              'span',
+              { className: 'zsp-muted' },
+              '⚠ 账号库当前是内存库（数据目录不可写），重启后账号会消失。',
+            )
+          : null,
+      )
+    }
+
+
+    return {
+      inject: ['slots'],
+      apply(ctx) {
+        /* 1) 本插件详情页内嵌完整面板（agy-link 同款双 view 分发）。 */
+        guardContribution('bundle config', () =>
+          ctx.slots.inject(SLOT_CONFIG, () =>
+            ctx.slots.register({ name: SLOT_CONFIG, key: BUNDLE_KEY }, (ownerProps) => {
+              if ((ownerProps || {}).view === 'summary') {
+                return 'ZCode 账号池仪表盘：把 dsh-zcode-startplan 的账号池管理提升到设置页与侧栏（需保持原插件启用）。'
+              }
+              return Panel({})
+            }),
+          ),
+        )
+
+        /* 2) 设置页专属图形面板（agy-link 同款）。 */
+        guardContribution('settings section', () =>
+          ctx.slots.inject('settings.section', () =>
+            ctx.slots.register(
+              { name: 'settings.section', id: 'zcode-dashboard', order: 26, label: () => 'ZCode 账号池' },
+              () => Panel({ surface: 'settings' }),
+            ),
+          ),
+        )
+
+        /* 3) 侧栏专属入口 + 全页（workbuddy 同款配对注册）。 */
+        guardContribution('sidebar panel row', () =>
+          ctx.slots.inject('sidebar.panellist', () =>
+            ctx.slots.register(
+              { name: 'sidebar.panellist', id: MAIN_PAGE_KEY, order: 3, label: () => 'ZCode 账号池' },
+              function ZcodeDashboardPanelIcon() {
+                return h('span', { style: { display: 'inline-flex', width: '16px', height: '16px', alignItems: 'center', justifyContent: 'center' } }, 'Z')
+              },
+            ),
+          ),
+        )
+        guardContribution('main page', () =>
+          ctx.slots.inject('main', () =>
+            ctx.slots.register(
+              { name: 'main', key: MAIN_PAGE_KEY },
+              function ZcodeDashboardPage(props) {
+                return h(
+                  'div',
+                  { style: { padding: '16px 20px', maxWidth: '860px', margin: '0 auto', overflow: 'auto', height: '100%' } },
+                  Panel(Object.assign({}, props, { surface: 'page' })),
+                )
+              },
+            ),
+          ),
+        )
+      },
+    }
+  },
+})

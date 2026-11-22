@@ -1,0 +1,23 @@
+{
+  "name": "dsh-zcode-dashboard",
+  "version": "0.1.0",
+  "description": "ZCode 账号池仪表盘：把 dsh-zcode-startplan 的账号池管理提升到设置页与侧栏（纯 UI 壳，不新增路由、不碰凭据）",
+  "license": "MIT",
+  "dsh": {
+    "id": "dsh-zcode-dashboard",
+    "name": "ZCode 账号池仪表盘",
+    "version": "0.1.0",
+    "permissions": "界面增强（只读原插件 API）",
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.0"
+  }
+}
